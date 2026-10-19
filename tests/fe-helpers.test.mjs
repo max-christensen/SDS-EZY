@@ -2,36 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-const ML = require("../public/lib/manifest-layout.js");
 const ZB = require("../public/lib/zip-build.js");
 const QR = require("../public/lib/qr.js");
 const H = require("../public/lib/sds-hash.js");
 const fflate = require("fflate");
 const qrcode = require("qrcode-generator");
-
-test("manifest totals group by class and unit", () => {
-  const rows = [
-    { dg_class: "3", quantity: 20, unit: "L" }, { dg_class: "3", quantity: 5, unit: "L" },
-    { dg_class: "8", quantity: 2.5, unit: "kg" }, { dg_class: "", quantity: 1, unit: "L" }, { dg_class: "2.1", quantity: 9, unit: "kg" },
-  ];
-  const t = ML.computeTotals(rows);
-  assert.deepEqual(t.map((x) => x.dg_class), ["2.1", "3", "8", "Unclassified"]);
-  assert.equal(t[1].litres, 25);
-  assert.equal(t[2].kg, 2.5);
-});
-
-test("manifest from export data only takes hazardous chemicals with locations", () => {
-  const rows = ML.rowsFromExport({
-    chemicals: [{ id: 1, product_name: "B", decision: "hazardous", dg_class: "3", un_number: "1263" }, { id: 2, product_name: "A", decision: "not_hazardous" }, { id: 3, product_name: "C", decision: "hazardous" }],
-    locations: [{ chemical_id: 1, location: "Shed", quantity: 4, unit: "L" }, { chemical_id: 2, location: "X", quantity: 1, unit: "L" }],
-  });
-  assert.equal(rows.length, 1);
-  const L = ML.LAYOUT;
-  assert.equal(L.columns.find((c) => c.key === "un").get(rows[0]), "UN 1263");
-  const csv = ML.csvRows({ rows, generated_at: "2026-10-19" }, { company_name: "Acme" });
-  assert.equal(csv[0][0], L.title);
-  assert.ok(csv.some((r) => r[0] === "Business" && r[1] === "Acme"));
-});
 
 test("zip names are safe, unique and truncated", () => {
   assert.equal(ZB.sanitiseFileName('A/B:C*"D"?'), "A B C D");

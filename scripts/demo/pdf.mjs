@@ -1,13 +1,11 @@
 // Builds one clearly fictional, 16-section safety data sheet PDF with pdf-lib (standard fonts, real extractable text).
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { H_TEXT, P_TEXT, TAG_P, HAZARD_PHRASE, SUPPLIERS } from './text.mjs';
+import { P_TEXT, TAG_P, HAZARD_PHRASE, SUPPLIERS } from './text.mjs';
+import { H_STATEMENTS, PICTOGRAMS, derive } from '../../public/lib/ghs-ref.mjs';
+import { entryCodes, UNCONFIRMED_CATEGORY } from './classes.mjs';
 
 export const BANNER = 'FICTIONAL DEMONSTRATION DOCUMENT - NOT A REAL SAFETY DATA SHEET';
 
-const PICTO_NAME = {
-  toxic: 'Skull and crossbones (acute toxicity)', health: 'Health hazard', flame: 'Flame', exclamation: 'Exclamation mark',
-  oxidising: 'Flame over circle (oxidising)', gas: 'Gas cylinder', environment: 'Environment', corrosive: 'Corrosion',
-};
 
 const FIRST_AID = {
   flam: ['Inhalation: move to fresh air. Seek medical advice if symptoms persist.', 'Skin: remove contaminated clothing, wash skin with soap and water.', 'Eyes: rinse with water for at least 15 minutes. Seek medical advice.', 'Ingestion: do NOT induce vomiting. Rinse mouth and seek medical advice.'],
@@ -78,18 +76,31 @@ const winAnsi = s => String(s).replace(/[^\x20-\x7E]/g, '?');
 
 function pCodes(code) { return code.replace(/P(\d{3})/g, (m, d, i) => (i ? '+' : '') + 'P' + d); }
 
-export function hList(spec) { return spec.H.map(c => `${c} ${H_TEXT[c][0]}`); }
 export function pCodeList(spec) {
   const out = [];
   for (const t of spec.tags) for (const c of TAG_P[t]) if (!out.includes(c)) out.push(c);
   return out;
 }
 export function pList(spec) { return pCodeList(spec).map(c => `${pCodes(c)} ${P_TEXT[c]}`); }
-export function classificationText(spec) {
-  const out = [];
-  for (const c of spec.H) { const l = H_TEXT[c][1]; if (!out.includes(l)) out.push(l); }
-  return out.join('; ');
+const ABBR = { flam_gas: 'Flam. Gas', aerosol: 'Aerosol', ox_gas: 'Ox. Gas', flam_liq: 'Flam. Liq.', ox_liquid: 'Ox. Liq.', corr_metal: 'Met. Corr.',
+  acute_tox: 'Acute Tox.', resp_sens: 'Resp. Sens.', skin_sens: 'Skin Sens.', germ_cell: 'Muta.', carcinogen: 'Carc.', repro_tox: 'Repr.', stot_se: 'STOT SE', stot_re: 'STOT RE', aspiration: 'Asp. Tox.' };
+export function abbrevLabel(spec, c, k) {
+  if (c === 'skin_corr') return k === '2' ? 'Skin Irrit. 2' : (UNCONFIRMED_CATEGORY[spec.k]?.c === c ? 'Skin Corr. 1' : 'Skin Corr. ' + k);
+  if (c === 'eye_dmg') return k === '1' ? 'Eye Dam. 1' : 'Eye Irrit. ' + k;
+  if (c === 'gas_pressure') return 'Press. Gas (' + k + ')';
+  return ABBR[c] + ' ' + k;
 }
+/** [{text: 'Flam. Liq. 2 (H225)', codes, statements:[...]}] for section 2, in the usual abbreviations. */
+export function classificationLines(spec) {
+  return spec.cls.map(([c, k, codes]) => {
+    const cs = entryCodes(c, k, codes);
+    return { text: abbrevLabel(spec, c, k) + ' (' + cs.join(', ') + ')', codes: cs };
+  });
+}
+export function hCodeList(spec) { return [...new Set(classificationLines(spec).flatMap(l => l.codes))]; }
+export function hList(spec) { return hCodeList(spec).map(c => c + ' ' + H_STATEMENTS[c]); }
+export function derivedFor(spec) { return derive(spec.cls.map(([c, k]) => ({ c, k }))); }
+export function classificationText(spec) { return classificationLines(spec).map(l => l.text).join('; '); }
 
 function fmtLong(iso) {
   const m = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -155,7 +166,8 @@ export async function buildSdsPdf(spec, ctx) {
 
   const sup = SUPPLIERS[spec.s];
   const tags = spec.tags;
-  const hz = !!spec.hz;
+  const hz = spec.cls.length > 0;
+  const dv = derivedFor(spec);
   section(1, 'Identification');
   kv('Product name', spec.t);
   kv('Product code(s)', (ctx.codes || []).filter(Boolean).join(', ') || 'n/a');
@@ -168,13 +180,15 @@ export async function buildSdsPdf(spec, ctx) {
   if (ctx.issue) kv('Issue date', fmtLong(ctx.issue)); else kv('Issue date', 'not stated');
 
   section(2, 'Hazards identification');
-  kv('GHS classification', hz ? classificationText(spec) : 'Not classified as hazardous');
-  kv('Signal word', hz ? spec.sig : 'None');
-  kv('Pictograms', hz ? spec.pic.map(p => PICTO_NAME[p]).join('; ') + '  [codes: ' + spec.pic.join(', ') + ']' : 'None required');
+  if (hz) { para('GHS classification', { f: bold, gap: 1 }); classificationLines(spec).forEach(l => para(l.text, { indent: 8, gap: 0 })); y -= 3; }
+  else kv('GHS classification', 'Not classified as hazardous');
+  kv('Signal word', hz && dv.signal_word ? dv.signal_word : 'None');
+  kv('Pictograms', dv.pictograms.length ? dv.pictograms.map(p => p + ' ' + PICTOGRAMS.find(x => x.code === p).name).join('; ') : 'None required');
   if (hz) {
     para('Hazard statements', { f: bold, gap: 1 });
     hList(spec).forEach(l => para(l, { indent: 8, gap: 0 }));
     y -= 3;
+    if (spec.extraH) kv('Other hazard statements (not GHS classes on the Safe Work Australia table)', spec.extraH.map(c => c + ' ' + {H411: 'Toxic to aquatic life with long lasting effects'}[c]).join('; '));
     para('Precautionary statements', { f: bold, gap: 1 });
     pList(spec).forEach(l => para(l, { indent: 8, gap: 0 }));
     y -= 3;

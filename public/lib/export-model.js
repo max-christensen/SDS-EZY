@@ -16,11 +16,6 @@
   const STATUS_LABEL = { overdue: "Overdue", due_soon: "Due within 90 days", ok: "Up to date", no_sds: "No SDS on file", unknown: "No issue date" };
   const KIND_LABEL = { isolation: "Isolation", ventilation: "Ventilation", other: "Other controls", ppe: "PPE", additional_ppe: "Additional PPE" };
   const KINDS = ["isolation", "ventilation", "other", "ppe", "additional_ppe"];
-  const PICTOGRAM_LABEL = {
-    toxic: "Toxic", health: "Health hazard", flame: "Flammable", exclamation: "Irritant / harmful",
-    oxidising: "Oxidising", gas: "Gas under pressure", environment: "Environmental hazard", corrosive: "Corrosive",
-  };
-
   const s = (v) => (v == null ? "" : String(v).trim());
 
   function todayIso(d) { return (d || new Date()).toISOString().slice(0, 10); }
@@ -48,6 +43,22 @@
     return out;
   }
 
+  // ghs_classification arrives as an array, a JSON string, or null (null = not classified yet; [] = classified, none apply).
+  function parseClassification(v) {
+    if (Array.isArray(v)) return v;
+    if (typeof v === "string" && v.trim()) { try { const p = JSON.parse(v); return Array.isArray(p) ? p : null; } catch (e) { return null; } }
+    return null;
+  }
+  // "GHS02 Flame; GHS07 Exclamation mark" (codes and names as text, for exports). ref = ghs-ref.mjs
+  function pictogramText(codes, ref) {
+    return (codes || []).map((c) => { const i = ref && ref.pictogramInfo(c); return i ? c + " " + i.name : c; }).join("; ");
+  }
+  function classificationText(list, ref) {
+    if (list == null) return "Not classified yet";
+    if (!list.length) return "None of the classifications";
+    return list.map((e) => (ref ? ref.classificationLabel(e) : e.c + (e.k ? " " + e.k : "")) + (e.check ? " (category not confirmed)" : "")).join("; ");
+  }
+
   function uniqueStr(list) { return [...new Set(list.filter(Boolean))]; }
 
   // data: the export reply. Returns the model.
@@ -72,7 +83,11 @@
       row.status = reviewStatus(row, t);
       row.locations = locBy.get(id) || [];
       row.assessment = asBy.get(id) || null;
-      row.pictogramList = s(c.pictograms).split(",").map((x) => x.trim()).filter(Boolean);
+      row.pictogramList = s(c.pictograms).split(",").map((x) => x.trim().toUpperCase()).filter((x) => /^GHS0[1-9]$/.test(x));
+      row.classification = parseClassification(c.classification !== undefined ? c.classification : c.ghs_classification);
+      row.flags = (() => { let f = c.classification_flags; if (typeof f === "string") { try { f = JSON.parse(f); } catch (e) { f = []; } } return Array.isArray(f) ? f.map((x) => (typeof x === "string" ? x : s(x && x.message))).filter(Boolean) : []; })();
+      row.decision_overridden = !!(c.decision_overridden || c.decision_override);
+      row.pictograms_overridden = !!(c.pictograms_overridden || c.pictograms_override);
       return row;
     });
     chemicals.sort((a, b) => s(a.product_name).toLowerCase().localeCompare(s(b.product_name).toLowerCase()));
@@ -118,7 +133,7 @@
   }
 
   return {
-    RISK_LABEL, DECISION_LABEL, STATUS_LABEL, KIND_LABEL, KINDS, PICTOGRAM_LABEL,
-    normalise, reviewStatus, locationText, fmtDate, yesNo, flaggedFields, planSds, groupControls, uniqueStr, todayIso,
+    RISK_LABEL, DECISION_LABEL, STATUS_LABEL, KIND_LABEL, KINDS,
+    normalise, parseClassification, pictogramText, classificationText, reviewStatus, locationText, fmtDate, yesNo, flaggedFields, planSds, groupControls, uniqueStr, todayIso,
   };
 });

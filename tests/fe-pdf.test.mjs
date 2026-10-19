@@ -13,6 +13,8 @@ const PT = require("../public/lib/pdf-text.js");
 const writeXlsx = require("../public/vendor/write-excel-file.min.js");
 const readXlsx = require("../public/vendor/read-excel-file.min.js");
 
+const ref = await import("../public/lib/ghs-ref.mjs");
+const ML = require("../public/lib/manifest-layout.js");
 const D = { short: "Short disclaimer line for tests.", full: "Full disclaimer.", points: ["Point one.", "Point two."] };
 
 // A made-up SDS (fictional product) with `n` pages.
@@ -39,13 +41,13 @@ const data = {
   generated_at: "2026-10-19T01:00:00Z",
   company: { company_name: "Acme Workshop", company_address: "1 Test St", company_phone: "0400 000 000" },
   chemicals: [
-    { id: 1, product_name: "Thinner “2000” – fast", supplier: "Paintco", decision: "hazardous", sds_id: 10, sds_issue_date: "2023-03-12", review_due: "2028-03-12", risk_level: "significant_controlled", dg_class: "3", un_number: "1263", packing_group: "II", hazchem_code: "3YE", proper_shipping_name: "PAINT RELATED MATERIAL", signal_word: "Danger", pictograms: "flame,exclamation", use_description: "Gun cleaning ≥ daily" },
-    { id: 2, product_name: "Thinner Fast Pack", supplier: "Paintco", decision: "hazardous", sds_id: 10, sds_issue_date: "2023-03-12", review_due: "2020-01-01", risk_level: "uncertain", dg_class: "3" },
+    { id: 1, product_name: "Thinner “2000” – fast", supplier: "Paintco", decision: "hazardous", sds_id: 10, sds_issue_date: "2023-03-12", review_due: "2028-03-12", risk_level: "significant_controlled", dg_class: "3", un_number: "1263", packing_group: "II", hazchem_code: "3YE", proper_shipping_name: "PAINT RELATED MATERIAL", signal_word: "Danger", pictograms: "GHS02,GHS07", ghs_classification: JSON.stringify([{ c: "flam_liq", k: "2" }]), use_description: "Gun cleaning ≥ daily" },
+    { id: 2, product_name: "Thinner Fast Pack", supplier: "Paintco", decision: "hazardous", sds_id: 10, sds_issue_date: "2023-03-12", review_due: "2020-01-01", risk_level: "uncertain", dg_class: "3", pictograms: "GHS02", ghs_classification: JSON.stringify([{ c: "flam_liq", k: "2" }]) },
     { id: 3, product_name: "Hand soap", supplier: "CleanCo", decision: "not_hazardous", sds_id: null },
     { id: 4, product_name: "Missing file product", supplier: "X", decision: "hazardous", sds_id: 11, review_due: "2030-01-01", dg_class: "8" },
   ],
   locations: [
-    { chemical_id: 1, location: "Flammables cabinet", quantity: 20, unit: "L" },
+    { chemical_id: 1, location: "Flammables cabinet", quantity: 300, unit: "L" },
     { chemical_id: 2, location: "Shed", quantity: 5, unit: "L" },
     { chemical_id: 4, location: "Bay 2", quantity: 3, unit: "kg" },
   ],
@@ -62,8 +64,10 @@ test("sanitise keeps text the standard fonts can draw", () => {
 test("bundle: cover, register, manifest, assessments, SDS once", async () => {
   const model = EM.normalise(data, "2026-10-19");
   const fetched = [];
+  const totals = ref.computeSiteTotals(ML.entriesFromExport(data));
   const res = await PB.buildBundle(PDFLib, model, {
-    D,
+    D, ref, totals,
+    pictoDeps: { fetchBytes: async (u) => new Uint8Array(fs.readFileSync("public" + u)), toPng: async () => new Uint8Array(Buffer.from(PNG1, "base64")) },
     fetchSds: async (id) => { fetched.push(id); return id === 10 ? new Uint8Array(await fakeSds("Thinner 2000", 3)) : null; },
   });
   assert.deepEqual(fetched, [11, 10]);
@@ -77,15 +81,26 @@ test("bundle: cover, register, manifest, assessments, SDS once", async () => {
 
 test("xlsx sheets are built and round trip through the vendored writer/reader", async () => {
   const model = EM.normalise(data, "2026-10-19");
-  const sheets = XB.buildSheets(model, D);
-  assert.deepEqual(sheets.map((s) => s.sheet), ["Register", "Hazardous", "Manifest", "Assessments", "Review due"]);
+  const totals = ref.computeSiteTotals(ML.entriesFromExport(data));
+  const sheets = XB.buildSheets(model, D, { ref, totals });
+  assert.deepEqual(sheets.map((s) => s.sheet), ["Register", "Hazardous", "Manifest", "Placard and manifest", "Issues", "Assessments", "Review due"]);
   const blob = await writeXlsx(sheets).toBlob();
   const read = await readXlsx(blob);
-  assert.equal(read.length, 5);
+  assert.equal(read.length, 7);
   for (const s of read) assert.ok(s.data.some((row) => row.includes(D.short)), s.sheet + " has the disclaimer");
+  for (const sh of read) assert.ok(sh.data.some((row) => row.some((c) => /Safe Work Australia/.test(String(c)))), sh.sheet + " has the source line");
   const man = read.find((s) => s.sheet === "Manifest").data;
   assert.ok(man.some((r) => r[0] === "Business" && r[1] === "Acme Workshop"));
-  assert.ok(man.some((r) => r[0] === "3" && r[1] === 25));
+  const pm = read.find((s) => s.sheet === "Placard and manifest").data;
+  const itemRows = pm.filter((r) => typeof r[0] === "number");
+  assert.equal(itemRows.length, 43, "all 43 items");
+  const i7 = itemRows.find((r) => r[0] === 7);
+  assert.equal(i7[6], 305);
+  assert.equal(i7[7], "OVER");
+  assert.ok(pm.some((r) => /^Over the placard quantity: Item 7/.test(String(r[0]))));
+  assert.ok(read.find((s) => s.sheet === "Issues").data.flat().some((c) => /No GHS classification/.test(String(c))));
+  const reg = read.find((s) => s.sheet === "Register").data;
+  assert.ok(reg.flat().includes("GHS02 Flame; GHS07 Exclamation mark"));
   const rev = read.find((s) => s.sheet === "Review due").data;
   assert.ok(rev.flat().includes("Overdue"));
 });
@@ -102,4 +117,21 @@ test("pdf.js text extraction on a made-up SDS", async () => {
   const blank = await PDFLib.PDFDocument.create(); blank.addPage();
   const r2 = await PT.extractText(pdfjs, new Uint8Array(await blank.save()));
   assert.equal(r2.scanned, true);
+});
+
+const PNG1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+test("pictograms: GIF goes through toPng, the JPEG is embedded as is", async () => {
+  const doc = await PDFLib.PDFDocument.create();
+  const calls = [];
+  const m = await PB.embedPictograms(PDFLib, doc, ref, {
+    fetchBytes: async (u) => new Uint8Array(fs.readFileSync("public" + u)),
+    toPng: async (b, mime) => { calls.push(mime); return new Uint8Array(Buffer.from(PNG1, "base64")); },
+  });
+  assert.equal(m.size, 9);
+  assert.equal(calls.length, 8, "eight GIFs decoded, the flame JPEG not");
+  const flame = fs.readFileSync("public/pictograms/ghs-flame-pictogram.jpg");
+  assert.equal(m.get("GHS02").width, 220);
+  assert.equal(flame[0], 0xff);
+  const only = await PB.embedPictograms(PDFLib, doc, ref, { fetchBytes: async () => null, toPng: async () => null }, ["GHS02"]);
+  assert.equal(only.size, 0, "a missing file is skipped, not fatal");
 });

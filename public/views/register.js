@@ -8,7 +8,7 @@
       ['all', 'All', () => true],
       ['hazardous', 'Hazardous', (c) => c.decision === 'hazardous'],
       ['not_hazardous', 'Not hazardous', (c) => c.decision === 'not_hazardous'],
-      ['no_decision', 'Not checked yet', (c) => !c.decision],
+      ['no_decision', 'Not classified yet', (c) => !c.decision],
       ['overdue', 'Review overdue', (c) => c.review_status === 'overdue'],
       ['due_soon', 'Due soon', (c) => c.review_status === 'due_soon'],
       ['no_sds', 'No SDS', (c) => c.review_status === 'no_sds' || !c.sds_id],
@@ -31,7 +31,7 @@
     ['sds_date', 1, 'SDS date, oldest first'],
     ['sds_date', -1, 'SDS date, newest first'],
     ['risk', 1, 'Risk, highest first'],
-    ['class', 1, 'Dangerous goods class'],
+    ['class', 1, 'ADG class'],
   ];
 
   const txt = (v) => String(v || '').toLowerCase();
@@ -70,7 +70,7 @@
 
         root.innerHTML = `
           <div class="topbar">
-            <div><h1>${title}</h1><p class="sub">${hazardousOnly ? 'Chemicals decided as hazardous, with their hazard details.' : 'Every chemical on site.'}</p></div>
+            <div><h1>${title}</h1><p class="sub">${hazardousOnly ? 'Chemicals classed as hazardous, with their pictograms and signal word. The ADG class is for illustration only.' : 'Every chemical on site.'}</p></div>
             <div class="actions no-print"><button type="button" id="printBtn">Print</button><button type="button" id="csvBtn">Download CSV</button>${App.isAdmin() ? '' : ''}</div>
           </div>
           ${App.disclaimerHtml()}
@@ -101,10 +101,10 @@
         }
 
         function cardHtml(c) {
-          const picto = hazardousOnly ? App.pictogramRow(c.pictograms, 30) : '';
-          const meta = [c.signal_word, c.dg_class ? 'DG class ' + c.dg_class : '', c.sds_issue_date ? 'SDS ' + App.fmtDate(c.sds_issue_date) : ''].filter(Boolean).join(' · ');
+          const picto = (hazardousOnly || c.pictograms) ? App.pictogramRow(c.pictograms, 40) + App.overrideMark(c.pictograms_overridden, 'pictograms') : '';
+          const meta = [c.signal_word, c.dg_class ? 'ADG class ' + c.dg_class : '', c.sds_issue_date ? 'SDS ' + App.fmtDate(c.sds_issue_date) : ''].filter(Boolean).join(' · ');
           return `<a class="chem-card" href="#/chemical/${c.id}"><div class="name">${App.esc(c.product_name)}</div><div class="sup">${App.esc(c.supplier || 'Supplier not recorded')}</div>
-            <div class="badges">${hazardousOnly ? '' : App.decisionBadge(c.decision)}${picto}${App.reviewBadge(c.review_status, c.review_due)}${c.decision === 'not_hazardous' ? '' : App.riskBadge(c.risk_level, true)}</div>
+            <div class="badges">${hazardousOnly ? '' : App.decisionBadge(c.decision) + App.overrideMark(c.decision_overridden, 'decision')}${picto}${App.reviewBadge(c.review_status, c.review_due)}${c.decision === 'not_hazardous' ? '' : App.riskBadge(c.risk_level, true)}</div>
             ${meta ? `<div class="meta">${App.esc(meta)}</div>` : ''}</a>`;
         }
 
@@ -116,13 +116,13 @@
 
         function tableHtml(items) {
           const head = hazardousOnly
-            ? thBtn('Product', 'product') + thBtn('Supplier', 'supplier') + '<th scope="col">Hazards</th><th scope="col">Signal word</th>' + thBtn('DG class', 'class') + thBtn('SDS date', 'sds_date') + thBtn('Review', 'review') + thBtn('Risk', 'risk')
+            ? thBtn('Product', 'product') + thBtn('Supplier', 'supplier') + '<th scope="col">Hazards</th><th scope="col">Signal word</th>' + thBtn('ADG class', 'class') + thBtn('SDS date', 'sds_date') + thBtn('Review', 'review') + thBtn('Risk', 'risk')
             : thBtn('Product', 'product') + thBtn('Supplier', 'supplier') + thBtn('Decision', 'decision') + thBtn('SDS date', 'sds_date') + thBtn('Review', 'review') + thBtn('Risk', 'risk');
           const rows = items.map((c) => {
             const risk = c.decision === 'not_hazardous' ? '<span class="muted">Not needed</span>' : App.riskBadge(c.risk_level, true);
             const cells = hazardousOnly
-              ? `<td>${App.pictogramRow(c.pictograms, 32) || '<span class="muted">None recorded</span>'}</td><td>${App.esc(c.signal_word || '')}</td><td>${App.esc(c.dg_class || '')}</td>`
-              : `<td>${App.decisionBadge(c.decision)}</td>`;
+              ? `<td>${App.pictogramRow(c.pictograms, 40) || '<span class="muted">None</span>'}${App.overrideMark(c.pictograms_overridden, 'pictograms')}</td><td>${App.esc(c.signal_word || '')}</td><td>${App.esc(c.dg_class || '')}</td>`
+              : `<td>${App.decisionBadge(c.decision)}${App.overrideMark(c.decision_overridden, 'decision')}</td>`;
             return `<tr class="clickable" data-href="#/chemical/${c.id}"><td><a class="prod" href="#/chemical/${c.id}">${App.esc(c.product_name)}</a></td><td>${App.esc(c.supplier || '')}</td>${cells}<td>${App.esc(App.fmtDate(c.sds_issue_date))}</td><td>${App.reviewBadge(c.review_status, c.review_due)}</td><td>${risk}</td></tr>`;
           }).join('');
           return `<table class="data"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
@@ -163,13 +163,13 @@
 
         function exportRows() {
           const rows = [hazardousOnly
-            ? ['Product', 'Supplier', 'Decision', 'Hazards', 'Signal word', 'DG class', 'SDS date', 'Review due', 'Review status', 'Risk']
-            : ['Product', 'Supplier', 'Decision', 'SDS date', 'Review due', 'Review status', 'Risk', 'DG class', 'Signal word', 'Hazards']];
+            ? ['Product', 'Supplier', 'Decision', 'Hazards', 'Signal word', 'ADG class', 'SDS date', 'Review due', 'Review status', 'Risk']
+            : ['Product', 'Supplier', 'Decision', 'SDS date', 'Review due', 'Review status', 'Risk', 'ADG class', 'Signal word', 'Hazards']];
           visible().forEach((c) => {
             const risk = c.risk_level ? App.riskLabel(c.risk_level) : (c.decision === 'not_hazardous' ? 'Not needed' : 'No assessment');
             rows.push(hazardousOnly
-              ? [c.product_name, c.supplier, App.decisionLabel(c.decision), App.pictogramNames(c.pictograms), c.signal_word, c.dg_class, c.sds_issue_date, c.review_due, App.reviewLabel(c.review_status), risk]
-              : [c.product_name, c.supplier, App.decisionLabel(c.decision), c.sds_issue_date, c.review_due, App.reviewLabel(c.review_status), risk, c.dg_class, c.signal_word, App.pictogramNames(c.pictograms)]);
+              ? [c.product_name, c.supplier, App.decisionLabel(c.decision) + (c.decision_overridden ? ' (overridden)' : ''), App.pictogramNames(c.pictograms) + (c.pictograms_overridden ? ' (overridden)' : ''), c.signal_word, c.dg_class, c.sds_issue_date, c.review_due, App.reviewLabel(c.review_status), risk]
+              : [c.product_name, c.supplier, App.decisionLabel(c.decision) + (c.decision_overridden ? ' (overridden)' : ''), c.sds_issue_date, c.review_due, App.reviewLabel(c.review_status), risk, c.dg_class, c.signal_word, App.pictogramNames(c.pictograms)]);
           });
           return rows;
         }
@@ -202,12 +202,12 @@
           const rowsHtml = items.map((c) => {
             const risk = c.risk_level ? App.riskLabel(c.risk_level) : (c.decision === 'not_hazardous' ? 'Not needed' : 'No assessment');
             const cells = hazardousOnly
-              ? `<td>${App.pictogramRow(c.pictograms, 26)}</td><td>${App.esc(c.signal_word || '')}</td><td>${App.esc(c.dg_class || '')}</td>`
-              : `<td>${App.esc(App.decisionLabel(c.decision))}</td>`;
+              ? `<td>${App.pictogramRow(c.pictograms, 28)}</td><td>${App.esc(c.signal_word || '')}</td><td>${App.esc(c.dg_class || '')}</td>`
+              : `<td>${App.esc(App.decisionLabel(c.decision) + (c.decision_overridden ? ' (overridden)' : ''))}</td>`;
             return `<tr><td><strong>${App.esc(c.product_name)}</strong></td><td>${App.esc(c.supplier || '')}</td>${cells}<td>${App.esc(App.fmtDate(c.sds_issue_date))}</td><td>${App.esc(App.reviewLabel(c.review_status))}${c.review_due ? '<br>' + App.esc(App.fmtDate(c.review_due)) : ''}</td><td>${App.esc(risk)}</td></tr>`;
           }).join('');
           const head = hazardousOnly
-            ? '<th>Product</th><th>Supplier</th><th>Hazards</th><th>Signal word</th><th>DG class</th><th>SDS date</th><th>Review</th><th>Risk</th>'
+            ? '<th>Product</th><th>Supplier</th><th>Hazards</th><th>Signal word</th><th>ADG class</th><th>SDS date</th><th>Review</th><th>Risk</th>'
             : '<th>Product</th><th>Supplier</th><th>Decision</th><th>SDS date</th><th>Review</th><th>Risk</th>';
           App.print(`${App.printHeaderHtml()}<h1>${title}</h1><div class="print-sub">Printed ${App.esc(App.fmtDate(App.today()))}. ${items.length} chemicals.</div>${App.disclaimerHtml()}<table class="data"><thead><tr>${head}</tr></thead><tbody>${rowsHtml}</tbody></table>`, { landscape: true });
         });

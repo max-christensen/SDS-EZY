@@ -115,7 +115,7 @@ let chemA, sdsA, assessA;
 T("create SDS + chemical, review_due = issue + 5 years, summary in sync", async () => {
   const s = await admin.req("POST", "/api/sds", pdfForm({
     title: `Acetone ${RUN}`, supplier: "ChemCo", issue_date: "2024-02-29", dg_class: "3", signal_word: "danger",
-    un_number: "UN1090", packing_group: "II", pictograms: "flame,exclamation", cas_numbers: "67-64-1",
+    un_number: "UN1090", packing_group: "II", cas_numbers: "67-64-1",
   }));
   assert.equal(s.status, 201, JSON.stringify(s.data));
   sdsA = s.data.id;
@@ -124,15 +124,19 @@ T("create SDS + chemical, review_due = issue + 5 years, summary in sync", async 
   assert.equal(meta.data.un_number, "1090");
   assert.equal(meta.data.signal_word, "Danger");
   assert.equal(meta.data.has_file, 1);
-  const c = await admin.post("/api/chemicals", { product_name: `Acetone ${RUN}`, supplier: "ChemCo", decision: "hazardous", physical_form: "liquid", sds_id: sdsA });
+  const c = await admin.post("/api/chemicals", { product_name: `Acetone ${RUN}`, supplier: "ChemCo", decision: "hazardous", ghs_classification: [{ c: "flam_liq", k: "2" }, { c: "eye_dmg", k: "2A" }], physical_form: "liquid", sds_id: sdsA });
   assert.equal(c.status, 201, JSON.stringify(c.data));
   chemA = c.data.id;
   const g = await user.get(`/api/chemicals/${chemA}`);
   assert.equal(g.status, 200);
   assert.equal(g.data.chemical.review_due, "2029-02-28");
   assert.equal(g.data.chemical.dg_class, "3");
-  assert.equal(g.data.chemical.pictograms, "flame,exclamation");
+  assert.equal(g.data.chemical.pictograms, "GHS02,GHS07");
+  assert.equal(g.data.chemical.signal_word, "Danger");
+  assert.equal(g.data.chemical.decision, "hazardous");
   assert.equal(g.data.chemical.decision_by, ADMIN.name);
+  assert.equal(g.data.sds.pictograms, undefined);
+  assert.equal(g.data.sds.hazardous, undefined);
   assert.equal(g.data.chemical.search_text, undefined);
   assert.equal(g.data.sds.id, sdsA);
   assert.equal(g.data.assessment, null);
@@ -210,33 +214,118 @@ T("link / unlink SDS", async () => {
   assert.equal((await user.get(`/api/sds/${sdsA}`)).status, 200);
 });
 
-T("manifest totals by class", async () => {
-  const mk = async (name, dg, loc) => {
-    const s = await admin.req("POST", "/api/sds", pdfForm({ title: name, dg_class: dg, un_number: "1230" }, RUN + name));
-    const c = await admin.post("/api/chemicals", { product_name: name, decision: "hazardous", sds_id: s.data.id });
-    for (const l of loc) assert.equal((await admin.post(`/api/chemicals/${c.data.id}/locations`, l)).status, 201);
+T("manifest: Schedule 11 totals by GHS class, OVER flags, spill compound, units, overrides", async () => {
+  const mk = async (name, cls, locs, extra = {}) => {
+    const c = await admin.post("/api/chemicals", { product_name: `${name} ${RUN}`, ghs_classification: cls, ...extra });
+    assert.equal(c.status, 201, JSON.stringify(c.data));
+    for (const l of locs) assert.equal((await admin.post(`/api/chemicals/${c.data.id}/locations`, l)).status, 201);
     return c.data.id;
   };
-  const x = await mk(`Mani8 ${RUN}`, "8", [{ location: "Shed", quantity: 20, unit: "L" }, { location: "Bay", quantity: 5.5, unit: "kg" }]);
-  await mk(`Mani3 ${RUN}`, "3", [{ location: "Cabinet", quantity: 10, unit: "L" }]);
-  const nd = await admin.post("/api/chemicals", { product_name: `Nothaz ${RUN}`, decision: "not_hazardous" });
-  await admin.post(`/api/chemicals/${nd.data.id}/locations`, { location: "Shelf", quantity: 99, unit: "L" });
+  const before = (await user.get("/api/manifest")).data.totals;
+  const baseFlam2 = before.items.find(i => i.item === 7).total;
+  // 300 L of flammable liquid category 2 across two locations: over the placard quantity (250 L), not over the manifest quantity (1000 L)
+  const f2a = await mk("Flam2a", [{ c: "flam_liq", k: "2" }], [{ location: `Shed-${RUN}`, quantity: 200, unit: "L" }]);
+  await admin.post(`/api/chemicals/${f2a}/locations`, { location: `Yard-${RUN}`, quantity: 100, unit: "L" });
+  // category 4 in the same spill compound as a category 3 liquid is counted as category 3 (item 8)
+  const f3 = await mk("Flam3", [{ c: "flam_liq", k: "3" }], [{ location: `Cab-${RUN}`, spill_compound: `Bund-${RUN}`, quantity: 10, unit: "L" }]);
+  const f4 = await mk("Flam4", [{ c: "flam_liq", k: "4" }], [{ location: `Cab2-${RUN}`, spill_compound: `bund-${RUN}`, quantity: 20, unit: "L" }]);
+  // a kg quantity for an item that is given in litres is reported as an issue and not counted
+  const kgChem = await mk("Flam1kg", [{ c: "flam_liq", k: "1" }], [{ location: `Kg-${RUN}`, quantity: 50, unit: "kg" }]);
+  // classified hazardous but overridden to not hazardous: still in the totals (classification decides), absent from the rows
+  const ovr = await mk("OverrideNH", [{ c: "flam_liq", k: "3" }], [{ location: `Ov-${RUN}`, quantity: 7, unit: "L" }], { decision_override: "not_hazardous" });
+  // not classified: an issue, no items
+  const unc = await mk("Unclassified", undefined, [{ location: `Un-${RUN}`, quantity: 5, unit: "L" }]);
   const m = await user.get("/api/manifest");
   assert.equal(m.status, 200);
-  assert.ok(!m.data.rows.some(r => r.product_name.startsWith("Nothaz")));
-  const mine = m.data.rows.filter(r => r.product_name.includes(RUN) && r.product_name.startsWith("Mani"));
-  assert.equal(mine.length, 3);
-  const classes = m.data.rows.map(r => r.dg_class);
-  assert.ok(classes.indexOf("3") < classes.indexOf("8"));
-  const t8 = m.data.totals.find(t => t.dg_class === "8");
-  assert.ok(t8.litres >= 20 && t8.kg >= 5.5);
-  assert.ok(m.data.totals.find(t => t.dg_class === "3").litres >= 10);
-  const loc = mine[0].location_id;
+  const items = Object.fromEntries(m.data.totals.items.map(i => [i.item, i]));
+  assert.equal(m.data.totals.items.length, 43);
+  assert.equal(items[7].total - baseFlam2, 300);
+  assert.equal(items[7].placardOver, true);
+  assert.equal(items[7].manifestOver, false);
+  const item8 = items[8];
+  assert.ok(item8.contributors.some(k => k.chemical_id === f4 && k.rule === "spill_compound"), "category 4 counted as category 3");
+  assert.ok(item8.contributors.some(k => k.chemical_id === ovr));
+  assert.ok(!items[10].contributors.some(k => k.chemical_id === f4));
+  assert.ok(items[6].contributors.some(k => k.chemical_id === kgChem && k.counted === false));
+  assert.ok(m.data.totals.issues.some(x => x.code === "unit_mismatch" && x.chemical_id === kgChem));
+  assert.ok(m.data.totals.issues.some(x => x.code === "no_classification" && x.chemical_id === unc));
+  assert.ok(m.data.totals.over.placard.includes(7));
+  const rowFor = (id) => m.data.rows.filter(r => r.chemical_id === id);
+  assert.equal(rowFor(f2a).length, 2);
+  assert.deepEqual(rowFor(f2a)[0].items, [7]);
+  assert.deepEqual(rowFor(f4)[0].items, [8]);
+  assert.equal(rowFor(ovr).length, 0);
+  assert.equal(rowFor(unc).length, 0);
+  assert.ok(rowFor(f3)[0].spill_compound.startsWith("Bund"));
+  assert.equal(rowFor(f2a)[0].pictograms, "GHS02");
+  const loc = rowFor(f2a)[0].location_id;
   assert.equal((await admin.put(`/api/locations/${loc}`, { quantity: -1 })).status, 400);
   assert.equal((await admin.put(`/api/locations/${loc}`, { unit: "gal" })).status, 400);
-  assert.equal((await admin.put(`/api/locations/${loc}`, { quantity: 1 })).status, 200);
+  assert.equal((await admin.put(`/api/locations/${loc}`, { quantity: 1, spill_compound: "X" })).status, 200);
+  const got = (await user.get(`/api/chemicals/${f2a}`)).data.locations.find(l => l.id === loc);
+  assert.equal(got.spill_compound, "X");
   assert.equal((await admin.del(`/api/locations/${loc}`)).status, 200);
-  assert.equal((await admin.del(`/api/chemicals/${x}`)).status, 200);
+  for (const id of [f2a, f3, f4, kgChem, ovr, unc]) await admin.del(`/api/chemicals/${id}`);
+});
+
+T("classification: derives pictograms, signal word and decision; overrides; [] vs null", async () => {
+  const c = await admin.post("/api/chemicals", { product_name: `Cls ${RUN}`, ghs_classification: [{ c: "flam_liq", k: "2" }, { c: "skin_corr", k: "1A" }] });
+  const id = c.data.id;
+  let g = (await user.get(`/api/chemicals/${id}`)).data.chemical;
+  assert.equal(g.decision, "hazardous");
+  assert.equal(g.signal_word, "Danger");
+  assert.equal(g.pictograms, "GHS02,GHS05");
+  assert.ok(g.classification.every(e => e.src === "admin"));
+  assert.equal(g.decision_overridden, false);
+  assert.equal(g.derived.decision, "hazardous");
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { decision_override: "not_hazardous", pictograms_override: ["ghs09"] })).status, 200);
+  g = (await user.get(`/api/chemicals/${id}`)).data.chemical;
+  assert.equal(g.decision, "not_hazardous");
+  assert.equal(g.pictograms, "GHS09");
+  assert.equal(g.decision_overridden, true);
+  assert.equal(g.pictograms_overridden, true);
+  assert.equal(g.decision_override, "not_hazardous");
+  assert.equal(g.derived.decision, "hazardous");
+  assert.equal(g.derived.pictograms, "GHS02,GHS05");
+  const row = (await user.get(`/api/chemicals?q=${encodeURIComponent("cls " + RUN)}`)).data.items[0];
+  assert.equal(row.decision_overridden, true);
+  assert.equal(row.pictograms_overridden, true);
+  assert.equal(row.ghs_classification, undefined);
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { pictograms_override: "none" })).status, 200);
+  assert.equal((await user.get(`/api/chemicals/${id}`)).data.chemical.pictograms, null);
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { decision_override: null, pictograms_override: null })).status, 200);
+  g = (await user.get(`/api/chemicals/${id}`)).data.chemical;
+  assert.equal(g.decision, "hazardous");
+  assert.equal(g.pictograms, "GHS02,GHS05");
+  assert.equal(g.decision_overridden, false);
+  assert.equal(g.pictograms_overridden, false);
+  await admin.put(`/api/chemicals/${id}`, { decision: "not_hazardous", product_name: `Cls ${RUN}` });
+  assert.equal((await user.get(`/api/chemicals/${id}`)).data.chemical.decision, "hazardous");
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { ghs_classification: [] })).status, 200);
+  g = (await user.get(`/api/chemicals/${id}`)).data.chemical;
+  assert.deepEqual(g.classification, []);
+  assert.equal(g.decision, "not_hazardous");
+  assert.equal(g.signal_word, null);
+  assert.equal(g.pictograms, null);
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { ghs_classification: null })).status, 200);
+  g = (await user.get(`/api/chemicals/${id}`)).data.chemical;
+  assert.equal(g.classification, null);
+  assert.equal(g.decision, null);
+  assert.ok((await user.get("/api/review")).data.no_decision.some(r => r.id === id));
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { ghs_classification: [{ c: "flam_liq", k: "7" }] })).status, 400);
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { ghs_classification: [{ c: "nope", k: "1" }] })).status, 400);
+  assert.equal((await admin.put(`/api/chemicals/${id}`, { pictograms_override: "GHS99" })).status, 400);
+  assert.equal((await user.put(`/api/chemicals/${id}`, { ghs_classification: [] })).status, 403);
+  assert.equal((await user.put(`/api/chemicals/${id}`, { decision_override: "hazardous" })).status, 403);
+  assert.equal((await user.post("/api/chemicals", { product_name: "x", ghs_classification: [] })).status, 403);
+  await admin.put(`/api/chemicals/${id}`, { ghs_classification: [{ c: "acute_tox", k: "3" }] });
+  const e = (await user.get("/api/export/all")).data;
+  const ex = e.chemicals.find(x => x.id === id);
+  assert.deepEqual(ex.classification, [{ c: "acute_tox", k: "3", src: "admin" }]);
+  assert.equal(ex.pictograms, "GHS06");
+  assert.equal(e.manifest_totals.items.length, 43);
+  assert.ok(e.locations.every(l => "spill_compound" in l));
+  await admin.del(`/api/chemicals/${id}`);
 });
 
 T("options in use cannot be hard-deleted", async () => {
@@ -279,6 +368,17 @@ T("import dry run, real import, skip duplicates", async () => {
   const g = await user.get(`/api/chemicals/${q.data.items[0].id}`);
   assert.equal(g.data.locations.length, 2);
   assert.equal(g.data.chemical.source, "import");
+  const withDec = await admin.post("/api/import", { rows: [{ product_name: `Imp D ${RUN}`, decision: "hazardous", un_number: "1090", dg_class: "3", location: "L", quantity: 3, spill_compound: "SC" }] });
+  assert.equal(withDec.data.created, 1, JSON.stringify(withDec.data));
+  const d = (await user.get(`/api/chemicals?q=${encodeURIComponent("imp d " + RUN)}`)).data.items[0];
+  const dg = (await user.get(`/api/chemicals/${d.id}`)).data;
+  assert.equal(dg.chemical.classification, null);
+  assert.equal(dg.chemical.decision, "hazardous");
+  assert.equal(dg.chemical.decision_override, "hazardous");
+  assert.equal(dg.chemical.decision_overridden, true);
+  assert.equal(dg.sds.un_number, "1090");
+  assert.equal(dg.locations[0].spill_compound, "SC");
+  assert.equal(dg.chemical.pictograms, null);
   const again = await admin.post("/api/import", { rows: rows.slice(0, 3) });
   assert.equal(again.data.created, 0);
   assert.equal(again.data.skipped, 3);
@@ -346,8 +446,10 @@ T("a user gets 403 on every admin write and can read everything", async () => {
 });
 
 T("validation: bad input is a 400, never a 500", async () => {
-  for (const b of [{ product_name: "" }, { product_name: "x", decision: "maybe" }, { product_name: "x".repeat(300) },
-    { product_name: "x", physical_form: "jelly" }, { product_name: "x", sds_id: 99999999 }]) {
+  for (const b of [{ product_name: "" }, { product_name: "x".repeat(300) },
+    { product_name: "x", physical_form: "jelly" }, { product_name: "x", decision_override: "maybe" },
+    { product_name: "x", ghs_classification: [{ c: "flam_liq", k: "9" }] }, { product_name: "x", ghs_classification: "flam_liq" },
+    { product_name: "x", pictograms_override: ["toxic"] }, { product_name: "x", sds_id: 99999999 }]) {
     const r = await admin.post("/api/chemicals", b);
     assert.equal(r.status, 400, `${JSON.stringify(b).slice(0, 40)} -> ${r.status}`);
     assert.ok(r.data.error);

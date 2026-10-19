@@ -101,7 +101,7 @@
         });
       }
 
-      const PREVIEW_COLS = [['product_name', 'Product'], ['supplier', 'Supplier'], ['location', 'Location'], ['quantity', 'Qty'], ['unit', 'Unit'], ['un_number', 'UN'], ['dg_class', 'Class'], ['packing_group', 'PG'], ['hazchem_code', 'Hazchem'], ['sds_date', 'SDS date'], ['decision', 'Decision']];
+      const PREVIEW_COLS = [['product_name', 'Product'], ['supplier', 'Supplier'], ['location', 'Location'], ['quantity', 'Qty'], ['unit', 'Unit'], ['un_number', 'UN'], ['dg_class', 'ADG class'], ['packing_group', 'PG'], ['hazchem_code', 'Hazchem'], ['sds_date', 'SDS date'], ['decision', 'Decision']];
 
       function stepPreview(dry) {
         const s = IM.summarise(st.items);
@@ -170,7 +170,7 @@
           } else {
             shell(`<div class="card" role="status"><h2>Import finished</h2><p>${r.created} chemical${r.created === 1 ? ' was' : 's were'} added to the register. ${r.skipped} ${r.skipped === 1 ? 'was' : 'were'} skipped because ${r.skipped === 1 ? 'it was' : 'they were'} already there.</p>
               ${r.errors.length ? `<div class="notice warn"><strong>${r.errors.length} problem${r.errors.length === 1 ? '' : 's'}:</strong><ul>${r.errors.slice(0, 30).map((e) => `<li>${App.esc(e)}</li>`).join('')}</ul></div>` : ''}
-              <p class="hint">Imported chemicals have no safety data sheet yet. Upload the SDS for each one and the review dates will appear.</p>
+              <p class="hint">Imported chemicals are not classified yet and have no safety data sheet. The ADG class in a spreadsheet says nothing about the GHS hazard class and category, so they show as "not classified" on the manifest until the SDS is uploaded or an admin records the classification.</p>
               <div class="actions"><a class="btn primary" href="#/register">Open the register</a><a class="btn" href="#/upload">Upload an SDS</a></div></div>`);
           }
         } catch (e) {

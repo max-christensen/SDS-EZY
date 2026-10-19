@@ -134,8 +134,8 @@ function goodData(over = {}) {
       h_statements: "H225 Highly flammable liquid and vapour; H319 Causes serious eye irritation; H999 Invented hazard",
       p_statements: "P210 Keep away from heat; P305+P351+P338 IF IN EYES: rinse; P999 Invented",
       poison_schedule: "S5", un_number: "UN 1993", dg_class: "3", subsidiary_class: null, packing_group: "PG II", hazchem_code: "•3YE",
-      proper_shipping_name: "FLAMMABLE LIQUID, N.O.S.", pictograms: ["flame", "exclamation"], cas_numbers: ["64-17-5", "67-63-0", "71-43-2"], ...over },
-    products: [{ product_name: "KARRA CLEAN Solvent Wash 5L" }], decision: "hazardous", assessment: { risk_level: "significant_controlled" },
+      proper_shipping_name: "FLAMMABLE LIQUID, N.O.S.", cas_numbers: ["64-17-5", "67-63-0", "71-43-2"], ...over },
+    products: [{ product_name: "KARRA CLEAN Solvent Wash 5L" }], assessment: { risk_level: "significant_controlled" },
   });
   assert.ok(v.ok, JSON.stringify(v.errors));
   return v.data;
@@ -189,14 +189,18 @@ test("prompt injection inside the SDS cannot make invented values verifiable", (
 });
 
 test("validateExtraction: good, wrong types, structure, coercion, clamping", () => {
-  const ok = validateExtraction({ sds: { title: 123, pictograms: ["Skull", "gas cylinder", "bogus"], signal_word: "danger" }, products: [{ product_name: "A" }, { product_name: "a" }],
-    decision: "Not Hazardous", assessment: { risk_level: "nonsense", route_inhalation: "yes", monitoring_needed: "no", physical_form: "x" } });
+  const ok = validateExtraction({ sds: { title: 123, signal_word: "danger" }, products: [{ product_name: "A" }, { product_name: "a" }],
+    classification: [{ class: "flam_liq", category: 2 }, "junk"], assessment: { risk_level: "nonsense", route_inhalation: "yes", monitoring_needed: "no", physical_form: "x" } });
   assert.ok(ok.ok);
   assert.equal(ok.data.sds.title, "123");
-  assert.deepEqual(ok.data.sds.pictograms, ["toxic", "gas"]);
+  assert.equal(ok.data.sds.pictograms, undefined, "pictograms are not read from the AI");
   assert.equal(ok.data.sds.signal_word, "Danger");
   assert.deepEqual(ok.data.products.map(p => p.product_name), ["A", "a (2)"]);
-  assert.equal(ok.data.decision, "not_hazardous");
+  assert.equal(ok.data.decision, undefined, "decision is not read from the AI");
+  assert.deepEqual(ok.data.classification, [{ class: "flam_liq", category: 2 }], "non-object entries removed; numbers tolerated until normalised");
+  assert.equal(validateExtraction({ sds: {}, products: [{ product_name: "A" }] }).data.classification, null, "missing = none usable");
+  assert.equal(validateExtraction({ sds: {}, products: [{ product_name: "A" }], classification: "flammable" }).data.classification, null);
+  assert.deepEqual(validateExtraction({ sds: {}, products: [{ product_name: "A" }], classification: [] }).data.classification, []);
   assert.equal(ok.data.assessment.risk_level, "uncertain");
   assert.equal(ok.data.assessment.route_inhalation, true);
   assert.equal(ok.data.assessment.monitoring_needed, false);

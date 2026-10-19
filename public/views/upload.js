@@ -8,7 +8,7 @@
     un_number: 'UN number', dg_class: 'Dangerous goods class', subsidiary_class: 'Subsidiary risk', packing_group: 'Packing group',
     hazchem_code: 'Hazchem code', proper_shipping_name: 'Proper shipping name', issue_date: 'SDS issue date', revision: 'Revision',
     emergency_phone: 'Emergency phone', poison_schedule: 'Poison schedule', h_statements: 'Hazard statements', p_statements: 'Precautionary statements',
-    cas_numbers: 'CAS numbers', signal_word: 'Signal word', supplier: 'Supplier', title: 'Product name',
+    cas_numbers: 'CAS numbers', classification: 'GHS classification', signal_word: 'Signal word', supplier: 'Supplier', title: 'Product name',
   };
   const label = (k) => FIELD_LABELS[k] || String(k).replace(/_/g, ' ');
 
@@ -143,7 +143,7 @@
       async function namedLinks(ids) {
         const out = [];
         for (const id of ids || []) {
-          try { const d = await App.api('/chemicals/' + Number(id)); out.push({ id: Number(id), name: d.chemical.product_name }); } catch (e) { out.push({ id: Number(id), name: 'Chemical #' + Number(id) }); }
+          try { const d = await App.api('/chemicals/' + Number(id)); out.push({ id: Number(id), name: d.chemical.product_name, c: d.chemical }); } catch (e) { out.push({ id: Number(id), name: 'Chemical #' + Number(id) }); }
         }
         return out;
       }
@@ -243,7 +243,25 @@
         }
       }
 
+      let ref = null;
+      // What the sheet was classified as (GHS class and category), the pictograms and signal word worked out from it, and any flags.
+      function classHtml(c) {
+        if (!c) return '';
+        const cl = c.classification;
+        let h = '<div class="hint" style="margin:2px 0 6px">';
+        if (cl == null) h += 'Not classified yet: no hazard class could be read from the sheet, so an admin needs to record it.';
+        else if (!cl.length) h += 'None of the GHS hazard classifications apply (not hazardous).';
+        else h += '<strong>Classification:</strong> ' + cl.map((e) => App.esc((ref ? ref.classificationLabel(e) : e.c + (e.k ? ' ' + e.k : '')) + (e.check ? ' (category not confirmed)' : ''))).join('; ') + '.';
+        if (cl != null) h += ' <strong>Signal word:</strong> ' + App.esc(c.signal_word || 'none') + '.';
+        h += '</div>';
+        if (c.pictograms) h += '<div style="margin:0 0 6px">' + App.pictogramRow(c.pictograms, 44) + '</div>';
+        const fl = c.classification_flags || [];
+        if (fl.length) h += '<div class="notice warn" style="margin:4px 0 8px"><strong>Please check the classification:</strong><ul style="margin:4px 0 0;padding-left:18px">' + fl.map((f) => '<li>' + App.esc(typeof f === 'string' ? f : f.message || '') + '</li>').join('') + '</ul></div>';
+        return h;
+      }
+
       async function stepResult(res) {
+        try { ref = ref || await import('/lib/ghs-ref.mjs'); } catch (e) { ref = null; }
         const ids = res.chemical_ids || [];
         const links = await namedLinks(ids);
         if (dead) return;
@@ -264,7 +282,7 @@
         shell(`<div class="card" role="status"><h2>${App.esc(headline)}</h2><p>${App.esc(body)}</p>
           ${st.scanned ? '<div class="notice warn">The sheet had no readable text, so the entry is a draft for an admin to fill in.</div>' : ''}
           <h3 style="font-size:14px;margin:14px 0 4px">What was created</h3>
-          <ul class="up-links">${links.length ? links.map((l) => `<li><a href="#/chemical/${l.id}">${App.esc(l.name)}</a></li>`).join('') : '<li>The safety data sheet was saved.</li>'}</ul>
+          <ul class="up-links">${links.length ? links.map((l) => `<li><a href="#/chemical/${l.id}">${App.esc(l.name)}</a>${classHtml(l.c)}</li>`).join('') : '<li>The safety data sheet was saved.</li>'}</ul>
           ${flat.length ? `<div class="notice warn" style="margin-top:14px"><strong>Please check these:</strong> ${flat.map((f) => `<span class="flag">${App.esc(label(f))}</span>`).join(' ')}<br><span class="hint">These were not found in the SDS text, so they were left blank rather than guessed.</span></div>` : ''}
           ${(res.warnings || []).length ? `<ul class="up-links">${res.warnings.map((w) => `<li>${App.esc(typeof w === 'string' ? w : w.message || '')}</li>`).join('')}</ul>` : ''}
           <p class="hint" style="margin-top:16px">${App.esc((window.DISCLAIMER && window.DISCLAIMER.short) || '')}</p>

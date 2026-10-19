@@ -67,6 +67,7 @@
     <li><a href="#upload">Uploading an SDS</a></li>
     <li><a href="#register">The register</a></li>
     <li><a href="#hazardous">The hazardous register</a></li>
+    <li><a href="#classification">Classification and pictograms</a></li>
     <li><a href="#chemical">A chemical's page</a></li>
     <li><a href="#assessment">The risk assessment</a></li>
     <li><a href="#editing">Editing (admins)</a></li>
@@ -114,7 +115,7 @@
   <li><strong>Overdue</strong>: the SDS is more than 5 years old. Get a new one from the supplier.</li>
   <li><strong>Due soon</strong>: the SDS will be 5 years old within 90 days.</li>
   <li><strong>No SDS</strong>: no safety data sheet is attached yet.</li>
-  <li><strong>Not checked yet</strong>: nobody has decided if the chemical is hazardous.</li>
+  <li><strong>Not classified yet</strong>: the chemical has not been classified, so there is no hazardous or not hazardous decision.</li>
 </ul>
 <p>Tap a row to open the chemical. The review date is the issue date on the SDS plus 5 years.</p>
 
@@ -124,7 +125,8 @@
   <li>Only PDF files are accepted, up to the size limit set in Settings.</li>
   <li>If the same file is already on record, the app tells you. If it looks like a newer version of an SDS you already have, you can add it as the new version. The old one is kept in the history.</li>
   <li>If AI is not set up, or it fails, the SDS and the chemical are still saved. The assessment is left blank for an admin to fill in.</li>
-  <li>Anything the AI reported that cannot be found in the PDF text is left blank and marked <em>Not found in the SDS text, check</em>.</li>
+  <li>The AI reads the hazard classes and categories from section 2. They are checked against the H-codes in the PDF text. The decision, pictograms and signal word are worked out from the classification, never taken from the AI.</li>
+  <li>Anything else the AI reported that cannot be found in the PDF text is left blank and marked <em>Not found in the SDS text, check</em>.</li>
 </ul>
 
 <h2 id="register">The register</h2>
@@ -132,7 +134,19 @@
 <p><strong>Print</strong> makes a clean printed copy of what you can see. <strong>Download CSV</strong> saves it as a spreadsheet file.</p>
 
 <h2 id="hazardous">The hazardous register</h2>
-<p>Only the chemicals decided as hazardous, with their hazard pictograms, signal word and dangerous goods class. Print it for your records.</p>
+<p>Only the chemicals whose decision is hazardous, with their pictograms, signal word and ADG class (shown for illustration only). Print it for your records.</p>
+
+<h2 id="classification">Classification and pictograms</h2>
+<p>Every chemical is classified from section 2 of its SDS using the Safe Work Australia classification and labelling poster (the GHS, 7th revised edition). Each hazard class and category on the poster has a fixed pictogram, signal word and hazard statement, so SDS EZY works these out for you. You never tick pictograms by hand.</p>
+<ul>
+  <li><strong>The classification</strong> is the list of classes and categories the SDS shows, for example "Flammable liquids, Category 2". When you upload an SDS, the app reads it and the list is checked against the H-codes (such as H225) found in the SDS text. If they do not match, the chemical page shows <em>Check these details</em>.</li>
+  <li><strong>The decision</strong> follows from the list. A chemical with any classification is <em>hazardous</em>. A chemical that has been classified but carries none of the classifications is <em>not hazardous</em>. A chemical that has not been classified yet has <em>no decision</em>, and it shows up on the review list.</li>
+  <li><strong>Pictograms and signal word</strong> come from the same list. The nine official pictograms are shown. Some classes have no pictogram or no signal word on the poster, and the page says so.</li>
+  <li><strong>Category not confirmed</strong> means the class is known but the category is not. The page marks it so someone checks the SDS.</li>
+  <li><strong>Overrides (admins only).</strong> An admin can override the decision or the pictograms when the poster does not give the right answer, for example to add the environment pictogram, which the poster does not cover. An override is never hidden. Everyone sees <em>Overridden by an admin (derived: ...)</em> on the chemical page and a small <em>overridden</em> marker in the registers. <em>Reset to derived</em> removes it.</li>
+  <li><strong>ADG class</strong>, UN number, packing group and Hazchem code stay with the SDS details. The ADG class is shown for illustration only. Quantities for placards and the manifest use the GHS classification.</li>
+</ul>
+<p class="note">The classification table is reproduced from the Safe Work Australia poster as reference data. The regulations and the supplier's current SDS are the authority.</p>
 
 <h2 id="chemical">A chemical's page</h2>
 <p>Shows the product details, the hazard information from the SDS (with the standard red-diamond hazard pictograms), the SDS itself, the risk assessment and where it is stored.</p>
@@ -152,10 +166,11 @@
 <h2 id="editing">Editing (admins)</h2>
 <p>Admins see an <strong>Edit</strong> button on each chemical. The edit screen has separate sections, each saved on its own:</p>
 <ul>
-  <li><strong>Product details and decision</strong>: names, supplier, use, and whether it is hazardous.</li>
+  <li><strong>Product details</strong>: names, supplier, use and a note.</li>
+  <li><strong>Classification</strong>: add or remove hazard classes and categories, or say "not classified yet" or "carries none of the classifications". A preview shows the decision, pictograms and signal word that follow. The decision and pictogram overrides are here, each with a <em>Reset to derived</em> button.</li>
   <li><strong>Safety data sheet</strong>: attach one, fix its details, or replace it with a newer version. Replacing keeps the old one in the history and moves every product that used it to the new one. Your assessment is not changed, so check it against the new SDS.</li>
   <li><strong>Risk assessment</strong>: fill in or correct every part. <em>Save changes</em> updates the current assessment. <em>Save as a new version</em> keeps the old one in the history.</li>
-  <li><strong>Storage locations</strong>: where it is kept and how much, in litres or kilograms.</li>
+  <li><strong>Storage locations</strong>: where it is kept and how much, in litres or kilograms. The optional <em>spill compound</em> groups locations that share a spill area (used by the flammable liquid category 4 rule).</li>
 </ul>
 <p>The tick boxes for controls and PPE come from <strong>Options</strong>, where you can add, rename, reorder and switch off choices.</p>
 
@@ -163,7 +178,7 @@
 <p>Each chemical has a <strong>QR label</strong> you can print and stick on the container or cabinet. Scanning it with a phone opens that chemical's page (after logging in).</p>
 
 <h2 id="manifest">The manifest</h2>
-<p>The manifest lists the hazardous chemicals that have a storage location, grouped by dangerous goods class, with the total litres and kilograms for each class. Use it to see if you are near a storage limit.</p>
+<p>The manifest adds up the stock by GHS hazard class and category and compares each total with the placard and manifest quantities in Schedule 11 of the WHS Regulations. Use it to see if you are near a limit. Source of the reference data: Safe Work Australia.</p>
 
 <h2 id="takeaway">Take-away copies</h2>
 <p>The <strong>Take-away</strong> screen makes copies of the register that you can keep without logging in: spreadsheets, a PDF, and a zip with the SDS files. The disclaimer is included in each one. Make a new copy now and then, and keep it somewhere safe.</p>

@@ -1,6 +1,6 @@
 // One-time spreadsheet import. The browser parses and maps the columns; this validates and creates the rows.
 import { json, addYearsIso } from "./lib.js";
-import { bad, readJson, cleanStr, cleanEnum, cleanDate, PHYSICAL_FORMS, DECISIONS, buildSearchText } from "./register.js";
+import { bad, readJson, cleanStr, cleanEnum, cleanDate, PHYSICAL_FORMS, DECISIONS, buildSearchText, classificationStatements } from "./register.js";
 
 const MAX_ROWS = 2000;
 const CHUNK_STATEMENTS = 80;
@@ -22,7 +22,7 @@ function cleanRow(r) {
     product_codes: cleanStr(r.product_codes, 500, "Product codes"),
     use_description: cleanStr(r.use_description, 2000, "Use description"),
     physical_form: cleanEnum(r.physical_form ? String(r.physical_form).toLowerCase() : null, PHYSICAL_FORMS, "Physical form"),
-    decision: cleanEnum(r.decision ? String(r.decision).toLowerCase() : null, DECISIONS, "Decision"),
+    decision_override: cleanEnum(r.decision ? String(r.decision).toLowerCase() : null, DECISIONS, "Decision"),
     decision_note: cleanStr(r.decision_note, 1000, "Decision note"),
   };
   // Transport details and the SDS date from the spreadsheet go on a placeholder SDS row (no PDF yet).
@@ -40,7 +40,7 @@ function cleanRow(r) {
   if (location) {
     const q = r.quantity === undefined || r.quantity === null || r.quantity === "" ? 0 : Number(r.quantity);
     if (!Number.isFinite(q) || q < 0 || q > 1e9) throw bad("Quantity must be a number from 0 up");
-    loc = { location, quantity: Math.round(q * 1000) / 1000, unit: normUnit(r.unit), container_note: cleanStr(r.container_note, 300, "Container note") };
+    loc = { location, quantity: Math.round(q * 1000) / 1000, unit: normUnit(r.unit), container_note: cleanStr(r.container_note, 300, "Container note"), spill_compound: cleanStr(r.spill_compound, 200, "Spill compound") };
   }
   return { chem, loc, sds: hasSds ? sds : null };
 }
@@ -75,7 +75,7 @@ export async function handleImport(c) {
     const k = key(p.chem.product_name, p.chem.supplier);
     if (existing.has(k)) { skipped++; skippedList.push({ row: p.i + 1, product_name: p.chem.product_name }); continue; }
     const g = groups.get(k);
-    if (g) { if (p.loc) g.locs.push(p.loc); } else groups.set(k, { chem: p.chem, sds: p.sds, locs: p.loc ? [p.loc] : [] });
+    if (g) { if (p.loc) g.locs.push(p.loc); if (!g.sds && p.sds) g.sds = p.sds; } else groups.set(k, { chem: p.chem, sds: p.sds, locs: p.loc ? [p.loc] : [] });
   }
   const created = groups.size;
   const locationsCreated = [...groups.values()].reduce((n, g) => n + g.locs.length, 0);
@@ -93,16 +93,19 @@ export async function handleImport(c) {
         d.un_number, d.dg_class, d.subsidiary_class, d.packing_group, d.hazchem_code, user.id));
     }
     stmts.push(env.DB.prepare(
-      `INSERT INTO chemicals (product_name, supplier, synonyms, product_codes, use_description, physical_form, decision, decision_note,
-         decision_by, decision_at, source, search_text, created_by, sds_id, sds_issue_date, review_due, dg_class)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, ?, ${d ? "(SELECT MAX(id) FROM sds)" : "NULL"}, ?, ?, ?)`
-    ).bind(f.product_name, f.supplier, f.synonyms, f.product_codes, f.use_description, f.physical_form, f.decision, f.decision_note,
-      f.decision ? user.name : null, f.decision ? new Date().toISOString() : null, buildSearchText(f, d), user.id,
+      `INSERT INTO chemicals (product_name, supplier, synonyms, product_codes, use_description, physical_form, decision_note,
+         source, search_text, created_by, sds_id, sds_issue_date, review_due, dg_class)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'import', ?, ?, ${d ? "(SELECT MAX(id) FROM sds)" : "NULL"}, ?, ?, ?)`
+    ).bind(f.product_name, f.supplier, f.synonyms, f.product_codes, f.use_description, f.physical_form, f.decision_note,
+      buildSearchText(f, d), user.id,
       d ? d.issue_date : null, d && d.issue_date ? addYearsIso(d.issue_date, 5) : null, d ? d.dg_class : null));
+    // Not classified (ghs_classification NULL): the sheet's ADG class says nothing about the GHS category.
+    // A decision column becomes the override; the effective decision follows it.
+    stmts.push(...classificationStatements(env, "last", null, { overrides: { decision: f.decision_override, pictograms: null }, decisionBy: user.name }));
     for (const l of g.locs) {
       stmts.push(env.DB.prepare(
-        "INSERT INTO storage_locations (chemical_id, location, quantity, unit, container_note) VALUES ((SELECT MAX(id) FROM chemicals), ?, ?, ?, ?)"
-      ).bind(l.location, l.quantity, l.unit, l.container_note));
+        "INSERT INTO storage_locations (chemical_id, location, spill_compound, quantity, unit, container_note) VALUES ((SELECT MAX(id) FROM chemicals), ?, ?, ?, ?, ?)"
+      ).bind(l.location, l.spill_compound, l.quantity, l.unit, l.container_note));
     }
     if (stmts.length >= CHUNK_STATEMENTS) await flush();
   }

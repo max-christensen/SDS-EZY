@@ -187,7 +187,19 @@ table.rtable th { color: var(--ink-soft); font-weight: 600; font-size: 13px; bac
 
 /* ---------- pictograms ---------- */
 .picto-row { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; vertical-align: middle; }
-.picto { display: inline-block; flex-shrink: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+img.picto { display: inline-block; flex-shrink: 0; image-rendering: auto; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.ovr { display: inline-block; font-size: 11px; font-weight: 600; color: var(--warn); background: var(--warn-bg); border: 1px solid #E8D4A0; border-radius: 4px; padding: 0 5px; margin-left: 4px; vertical-align: middle; }
+table.classtable td.pic { white-space: nowrap; }
+table.classtable td.pic .picto-row { gap: 2px; }
+.cls-src { font-size: 11.5px; color: var(--muted); }
+.hcode { font-weight: 700; white-space: nowrap; }
+.pic-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; }
+.pic-opts label.inline { align-items: center; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+.cls-list { list-style: none; padding: 0; margin: 6px 0; }
+.cls-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.cls-list li:first-child { border-top: none; }
+.cls-list li .label { flex: 1 1 200px; }
+.preview { background: #FAF9F5; border: 1px dashed #B9B4A5; border-radius: 6px; padding: 10px 12px; margin-top: 10px; }
 .picto-names { font-size: 12.5px; color: var(--ink-soft); }
 
 /* ---------- chemical page ---------- */
@@ -290,7 +302,7 @@ legend { font-size: 13px; font-weight: 600; color: var(--ink-soft); padding: 0 6
   #printArea .tick { margin-right: 10px; }
   #printArea .risk-options .tick { display: inline-flex; margin-right: 12px; }
   #printArea h1 { font-size: 16px; }
-  #printArea .picto { width: 26px; height: 26px; }
+  #printArea .pa-head img.picto { width: 14mm; height: 14mm; }
   #printArea .tick::before { border-color: #000; }
   #printArea .tick.on::before { background: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   #printArea .pa-foot { margin-top: 8px; font-size: 10px; color: #444; }

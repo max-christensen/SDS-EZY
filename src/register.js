@@ -16,9 +16,19 @@
 //   summaryStatements(env, {chemicalId} | {sdsId})  -> array of prepared statements (for db.batch)
 //   refreshChemicalSummary(env, {chemicalId} | {sdsId})  copies sds_id-derived fields + current risk_level onto
 //        chemicals and rebuilds search_text. {sdsId} updates every chemical pointing at that SDS in ONE UPDATE...FROM.
+//   classificationStatements(env, chemicalId | "last", classification, {flags, overrides:{decision, pictograms}, decisionBy})
+//        -> array of prepared statements (put them in a db.batch). Stores ghs_classification (JSON or NULL = not classified,
+//        [] = classified, carries none), classification_flags, decision_override, pictograms_override and the EFFECTIVE decision,
+//        signal_word and pictograms (computed with effective() from public/lib/ghs-ref.mjs). decision_by/decision_at change only
+//        when the effective decision changes. Omitted flags -> NULL; omitted overrides -> cleared.
+//   applyClassification(env, chemicalId, classification, {flags, decisionBy, overrides})
+//        reads the chemical's current values for anything you leave undefined, then runs classificationStatements.
+//   cleanOverrides(b), cleanClassificationInput(v, {strict})   validation helpers for request bodies
 //   createChemical(env, fields, userId) -> id
 //        fields: product_name (required), supplier, synonyms, product_codes, use_description, physical_form, decision,
-//        decision_note, decision_by, decision_at, sds_id (must be a current SDS), source ('upload'|'manual'|'import'|'demo').
+//        decision_note, decision_by, sds_id (must be a current SDS), source ('upload'|'manual'|'import'|'demo'),
+//        ghs_classification (array or null), classification_flags (array), decision_override, pictograms_override.
+//        A plain `decision` is ignored: decision, signal_word and pictograms are DERIVED from the classification.
 //        Refreshes the summary columns itself.
 //   createAssessment(env, chemicalId, fields, controlOptionIds, userId) -> id
 //        fields: assessed_date, sds_date, form, use_description, route_inhalation/ingestion/absorption, fire_response,
@@ -29,11 +39,14 @@
 //   cleanAssessment(fields, {create, allowMeta})  validation used by createAssessment and assessments.js
 
 import { json, loadSettings, todayIso, daysBetweenIso } from "./lib.js";
+import {
+  effective, normaliseClassification, parsePictogramList, PICTOGRAM_CODES, itemsForClassification, computeSiteTotals,
+} from "../public/lib/ghs-ref.mjs";
 import { deleteSdsDocument } from "./sds.js";
 
 // ---------------------------------------------------------------- vocabulary
 
-export const PICTOGRAMS = ["toxic", "health", "flame", "exclamation", "oxidising", "gas", "environment", "corrosive"];
+export const PICTOGRAMS = PICTOGRAM_CODES; // GHS01..GHS09
 export const RISK_LEVELS = ["not_significant", "significant_controlled", "significant_not_controlled", "uncertain"];
 export const PHYSICAL_FORMS = ["liquid", "solid", "powder", "gas", "aerosol", "paste", "other"];
 export const DECISIONS = ["hazardous", "not_hazardous"];
@@ -145,7 +158,7 @@ export function summaryStatements(env, scope) {
   if (scope.sdsId !== undefined) {
     return [db.prepare(
       `UPDATE chemicals SET sds_issue_date = s.issue_date, review_due = s.review_due, dg_class = s.dg_class,
-         signal_word = s.signal_word, pictograms = s.pictograms, risk_level = ${RISK_SUB},
+         risk_level = ${RISK_SUB},
          search_text = ${searchExpr("s.cas_numbers")}, updated_at = datetime('now')
        FROM sds s WHERE s.id = ? AND chemicals.sds_id = s.id`
     ).bind(scope.sdsId)];
@@ -156,13 +169,13 @@ export function summaryStatements(env, scope) {
     // has an SDS
     db.prepare(
       `UPDATE chemicals SET sds_issue_date = s.issue_date, review_due = s.review_due, dg_class = s.dg_class,
-         signal_word = s.signal_word, pictograms = s.pictograms, risk_level = ${RISK_SUB},
+         risk_level = ${RISK_SUB},
          search_text = ${searchExpr("s.cas_numbers")}, updated_at = datetime('now')
        FROM sds s WHERE ${where} AND s.id = chemicals.sds_id`
     ).bind(...args),
     // no SDS
     db.prepare(
-      `UPDATE chemicals SET sds_issue_date = NULL, review_due = NULL, dg_class = NULL, signal_word = NULL, pictograms = NULL,
+      `UPDATE chemicals SET sds_issue_date = NULL, review_due = NULL, dg_class = NULL,
          risk_level = ${RISK_SUB}, search_text = ${searchExpr("NULL")}, updated_at = datetime('now')
        WHERE ${where} AND sds_id IS NULL`
     ).bind(...args),
@@ -192,8 +205,81 @@ export function cleanChemical(b, { create = false } = {}) {
     else if (create && k === "product_name") throw bad("Product name is required");
   }
   if (b.physical_form !== undefined) out.physical_form = cleanEnum(b.physical_form, PHYSICAL_FORMS, "Physical form");
-  if (b.decision !== undefined) out.decision = cleanEnum(b.decision, DECISIONS, "Decision");
   return out;
+}
+
+// ---------------------------------------------------------------- GHS classification, overrides, effective columns
+
+// Pictogram override input -> stored text: null (no override) | "none" | "GHS02,GHS07".
+export function cleanPictogramOverride(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const arr = Array.isArray(v) ? v : String(v).split(",").map(x => x.trim()).filter(Boolean);
+  if (arr.length === 0) return "none";
+  if (arr.length === 1 && String(arr[0]).toLowerCase() === "none") return "none";
+  for (const x of arr) if (!PICTOGRAM_CODES.includes(String(x).toUpperCase())) throw bad(`"${x}" is not a GHS pictogram code (GHS01 to GHS09)`);
+  const list = parsePictogramList(arr);
+  return list.join(",");
+}
+
+// Reads decision_override / pictograms_override (and the classification) out of a request body or helper fields.
+// Returns only the keys that were present: {ghs_classification?, decision_override?, pictograms_override?}.
+export function cleanOverrides(b) {
+  const out = {};
+  if (b.decision_override !== undefined) out.decision_override = cleanEnum(b.decision_override, DECISIONS, "Decision override");
+  if (b.pictograms_override !== undefined) out.pictograms_override = cleanPictogramOverride(b.pictograms_override);
+  return out;
+}
+
+// v: array | null. strict (HTTP): invalid entries are a 400. Not strict (upload pipeline): dropped.
+export function cleanClassificationInput(v, { strict = true } = {}) {
+  if (v === null) return null;
+  if (!Array.isArray(v)) throw bad("ghs_classification must be a list, or null for not classified");
+  const { list, dropped } = normaliseClassification(v);
+  if (strict && dropped.length) throw bad(`Not a valid GHS class and category: ${dropped.slice(0, 3).join(", ")}`);
+  return list;
+}
+
+function parseJson(text, dflt) {
+  if (!text) return dflt;
+  try { return JSON.parse(text); } catch { return dflt; }
+}
+
+export function overrideTextToValue(t) { return t === "none" ? [] : t ? t.split(",") : null; }
+
+function chemWhere(id) { return id === "last" ? ["id = last_insert_rowid()", []] : ["id = ?", [id]]; }
+
+export function classificationStatements(env, chemicalId, classification, opts = {}) {
+  const ov = opts.overrides || {};
+  const decOv = ov.decision === "hazardous" || ov.decision === "not_hazardous" ? ov.decision : null;
+  const picOv = typeof ov.pictograms === "string" || ov.pictograms == null ? ov.pictograms ?? null : cleanPictogramOverride(ov.pictograms);
+  const cls = classification == null ? null : classification;
+  const eff = effective(cls, { decision: decOv, pictograms: overrideTextToValue(picOv) });
+  const flags = Array.isArray(opts.flags) && opts.flags.length ? JSON.stringify(opts.flags.slice(0, 40).map(x => String(x).slice(0, 400))) : null;
+  const [where, args] = chemWhere(chemicalId);
+  const by = eff.decision ? (opts.decisionBy ?? null) : null;
+  const at = eff.decision ? new Date().toISOString() : null;
+  return [env.DB.prepare(
+    `UPDATE chemicals SET ghs_classification = ?, classification_flags = ?, decision_override = ?, pictograms_override = ?,
+       signal_word = ?, pictograms = ?,
+       decision_by = CASE WHEN decision IS ? THEN decision_by ELSE ? END,
+       decision_at = CASE WHEN decision IS ? THEN decision_at ELSE ? END,
+       decision = ?, updated_at = datetime('now')
+     WHERE ${where}`
+  ).bind(cls === null ? null : JSON.stringify(cls), flags, decOv, picOv, eff.signal_word, eff.pictograms.length ? eff.pictograms.join(",") : null,
+    eff.decision, by, eff.decision, at, eff.decision, ...args)];
+}
+
+export async function applyClassification(env, chemicalId, classification, opts = {}) {
+  const row = await env.DB.prepare(
+    "SELECT ghs_classification, classification_flags, decision_override, pictograms_override FROM chemicals WHERE id = ?"
+  ).bind(chemicalId).first();
+  if (!row) throw new ApiError(404, "Chemical not found");
+  const cls = classification === undefined ? parseJson(row.ghs_classification, null) : classification;
+  const flags = opts.flags !== undefined ? opts.flags : (classification === undefined ? parseJson(row.classification_flags, []) : []);
+  const overrides = opts.overrides || {
+    decision: row.decision_override, pictograms: row.pictograms_override,
+  };
+  await env.DB.batch(classificationStatements(env, chemicalId, cls, { flags, overrides, decisionBy: opts.decisionBy }));
 }
 
 async function userNameById(env, userId) {
@@ -212,18 +298,19 @@ export async function createChemical(env, fields, userId) {
     if (!s.is_current) throw bad("That SDS version is no longer the current one");
   }
   const source = SOURCES.includes(fields.source) ? fields.source : "manual";
-  let decisionBy = null, decisionAt = null;
-  if (f.decision) {
-    decisionBy = fields.decision_by ? cleanStr(fields.decision_by, 200, "Decision by") : await userNameById(env, userId);
-    decisionAt = fields.decision_at ? String(fields.decision_at).slice(0, 40) : nowIso();
-  }
+  const ov = cleanOverrides(fields);
+  const cls = fields.ghs_classification === undefined ? null : cleanClassificationInput(fields.ghs_classification, { strict: false });
+  const decisionBy = fields.decision_by ? cleanStr(fields.decision_by, 200, "Decision by") : await userNameById(env, userId);
   const stmts = [env.DB.prepare(
-    `INSERT INTO chemicals (product_name, supplier, synonyms, product_codes, use_description, physical_form, decision,
-       decision_note, decision_by, decision_at, sds_id, source, search_text, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO chemicals (product_name, supplier, synonyms, product_codes, use_description, physical_form,
+       decision_note, sds_id, source, search_text, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(f.product_name, f.supplier ?? null, f.synonyms ?? null, f.product_codes ?? null, f.use_description ?? null,
-    f.physical_form ?? null, f.decision ?? null, f.decision_note ?? null, decisionBy, decisionAt, sdsId, source,
-    buildSearchText(f, null), userId || null)];
+    f.physical_form ?? null, f.decision_note ?? null, sdsId, source, buildSearchText(f, null), userId || null)];
+  stmts.push(...classificationStatements(env, "last", cls, {
+    flags: Array.isArray(fields.classification_flags) ? fields.classification_flags : [],
+    overrides: { decision: ov.decision_override ?? null, pictograms: ov.pictograms_override ?? null }, decisionBy,
+  }));
   if (sdsId) stmts.push(...summaryStatements(env, { chemicalId: "last" }));
   const res = await env.DB.batch(stmts);
   return res[0].meta.last_row_id;
@@ -328,7 +415,8 @@ export async function createAssessment(env, chemicalId, fields, controlOptionIds
 // ---------------------------------------------------------------- handlers: review
 
 const CHEM_PUBLIC_COLS = `id, product_name, supplier, synonyms, product_codes, use_description, physical_form, decision, decision_note,
-  decision_by, decision_at, sds_id, sds_issue_date, review_due, risk_level, dg_class, signal_word, pictograms, source,
+  decision_by, decision_at, ghs_classification, classification_flags, decision_override, pictograms_override,
+  sds_id, sds_issue_date, review_due, risk_level, dg_class, signal_word, pictograms, source,
   created_by, created_at, updated_at`;
 
 export async function handleReview(c) {
@@ -385,7 +473,7 @@ export async function handleListChemicals(c) {
   if (filter !== "all" && filter !== "hazardous") throw bad("filter must be all or hazardous");
   const q = (url.searchParams.get("q") || "").trim().toLowerCase().slice(0, 100);
   const today = todayIso();
-  const cols = "id, product_name, supplier, decision, sds_id, sds_issue_date, review_due, risk_level, dg_class, signal_word, pictograms, source";
+  const cols = "id, product_name, supplier, decision, sds_id, sds_issue_date, review_due, risk_level, dg_class, signal_word, pictograms, source, ghs_classification, decision_override, pictograms_override";
   const conds = [];
   const args = [];
   if (filter === "hazardous") conds.push("decision = 'hazardous'");
@@ -409,7 +497,20 @@ export async function handleListChemicals(c) {
   } else if (q) {
     total = results.length;
   }
-  const items = results.map(r => ({ ...r, review_status: reviewStatus(r.review_due, r.sds_id, today) }));
+  const memo = new Map();
+  const items = results.map(r => {
+    const { ghs_classification, decision_override, pictograms_override, ...rest } = r;
+    let flags = { decision_overridden: false, pictograms_overridden: false };
+    if (decision_override || pictograms_override) {
+      const key = `${ghs_classification}|${decision_override}|${pictograms_override}`;
+      if (!memo.has(key)) {
+        const e = effective(parseJson(ghs_classification, null), { decision: decision_override, pictograms: overrideTextToValue(pictograms_override) });
+        memo.set(key, { decision_overridden: e.decision_overridden, pictograms_overridden: e.pictograms_overridden });
+      }
+      flags = memo.get(key);
+    }
+    return { ...rest, ...flags, review_status: reviewStatus(r.review_due, r.sds_id, today) };
+  });
   return json({ items, total });
 }
 
@@ -424,9 +525,22 @@ function intParam(url, name, dflt, min = 1) {
 const SDS_PUBLIC = `s.id, s.doc_key, s.version_no, s.is_current, s.title, s.supplier, s.file_name, s.file_size, s.file_hash, s.issue_date,
   s.revision, s.emergency_phone, s.review_due, s.signal_word, s.hazard_classification, s.h_statements, s.p_statements,
   s.poison_schedule, s.un_number, s.dg_class, s.subsidiary_class, s.packing_group, s.hazchem_code, s.proper_shipping_name,
-  s.pictograms, s.cas_numbers, s.unverified, s.source, s.ai_provider, s.hazardous, s.uploaded_by, s.uploaded_at, s.replaced_at,
+  s.cas_numbers, s.unverified, s.source, s.ai_provider, s.uploaded_by, s.uploaded_at, s.replaced_at,
   (s.r2_key IS NOT NULL) AS has_file`;
 export { SDS_PUBLIC };
+
+// Replaces the raw JSON columns with the parsed classification and adds the derived / overridden information.
+function decorateChemical(chem) {
+  const cls = parseJson(chem.ghs_classification, null);
+  const eff = effective(cls, { decision: chem.decision_override, pictograms: overrideTextToValue(chem.pictograms_override) });
+  delete chem.ghs_classification;
+  chem.classification = cls;
+  chem.classification_flags = parseJson(chem.classification_flags, []);
+  chem.derived = { decision: eff.derived.decision, pictograms: eff.derived.pictograms.join(","), signal_word: eff.derived.signal_word };
+  chem.decision_overridden = eff.decision_overridden;
+  chem.pictograms_overridden = eff.pictograms_overridden;
+  return chem;
+}
 
 export async function handleGetChemical(c) {
   const { env } = c;
@@ -436,7 +550,7 @@ export async function handleGetChemical(c) {
   if (!chem) throw new ApiError(404, "Chemical not found");
   const stmts = [
     env.DB.prepare("SELECT id, assessed_date, sds_date, form, use_description, route_inhalation, route_ingestion, route_absorption, fire_response, spill_response, controls_notes, ppe_notes, risk_level, monitoring_needed, monitoring_note, surveillance_needed, surveillance_note, assessed_by, source, unverified, sds_id, chemical_id, is_current, created_at, updated_at FROM assessments WHERE chemical_id = ? AND is_current = 1 ORDER BY id DESC LIMIT 1").bind(id),
-    env.DB.prepare("SELECT id, location, quantity, unit, container_note FROM storage_locations WHERE chemical_id = ? ORDER BY id").bind(id),
+    env.DB.prepare("SELECT id, location, spill_compound, quantity, unit, container_note FROM storage_locations WHERE chemical_id = ? ORDER BY id").bind(id),
   ];
   if (chem.sds_id) {
     stmts.push(env.DB.prepare(`SELECT ${SDS_PUBLIC} FROM sds s WHERE s.id = ?`).bind(chem.sds_id));
@@ -461,6 +575,7 @@ export async function handleGetChemical(c) {
     assessment.controls = ctl.results;
   }
   chem.review_status = reviewStatus(chem.review_due, chem.sds_id, today);
+  decorateChemical(chem);
   return json({ chemical: chem, sds, sds_products: sdsProducts, sds_products_total: sdsProductsTotal, assessment, locations: res[1].results });
 }
 
@@ -485,6 +600,11 @@ export async function handleHistory(c) {
 export async function handleCreateChemical(c) {
   const body = await readJson(c.request);
   const f = { ...body, source: "manual" };
+  delete f.decision; delete f.decision_by; delete f.classification_flags;
+  const cls = body.ghs_classification === undefined ? undefined : cleanClassificationInput(body.ghs_classification, { strict: true });
+  if (cls) f.ghs_classification = cls.map(e => ({ c: e.c, k: e.k, src: "admin" }));
+  else if (cls === null) f.ghs_classification = null;
+  f.decision_by = c.user.name;
   const id = await createChemical(c.env, f, c.user.id);
   return json({ id }, 201);
 }
@@ -493,20 +613,37 @@ export async function handleUpdateChemical(c) {
   const { env } = c;
   const id = cleanId(c.p[0], "Chemical");
   const body = await readJson(c.request);
-  const existing = await env.DB.prepare("SELECT id, decision FROM chemicals WHERE id = ?").bind(id).first();
+  const existing = await env.DB.prepare(
+    "SELECT id, ghs_classification, classification_flags, decision_override, pictograms_override FROM chemicals WHERE id = ?"
+  ).bind(id).first();
   if (!existing) throw new ApiError(404, "Chemical not found");
   const f = cleanChemical(body);
+  const ov = cleanOverrides(body);
+  const newCls = body.ghs_classification === undefined ? undefined : cleanClassificationInput(body.ghs_classification, { strict: true });
+  const classChanged = newCls !== undefined || ov.decision_override !== undefined || ov.pictograms_override !== undefined;
+  if (!Object.keys(f).length && !classChanged) throw bad("Nothing to update");
+  const stmts = [];
   const sets = [], vals = [];
   for (const k of Object.keys(f)) { sets.push(`${k} = ?`); vals.push(f[k]); }
-  if (f.decision !== undefined && f.decision !== existing.decision) {
-    sets.push("decision_by = ?", "decision_at = ?");
-    vals.push(f.decision ? c.user.name : null, f.decision ? nowIso() : null);
+  if (sets.length) stmts.push(env.DB.prepare(`UPDATE chemicals SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`).bind(...vals, id));
+  if (classChanged) {
+    const oldCls = parseJson(existing.ghs_classification, null);
+    let cls = oldCls, flags = parseJson(existing.classification_flags, []);
+    if (newCls !== undefined) {
+      const key = (l) => l ? l.map(e => `${e.c}:${e.k ?? ""}`).sort().join("|") : null;
+      if (key(newCls) === key(oldCls)) cls = oldCls; // unchanged: keep who/what produced it
+      else { cls = newCls === null ? null : newCls.map(e => ({ c: e.c, k: e.k, src: "admin" })); flags = []; }
+    }
+    stmts.push(...classificationStatements(env, id, cls, {
+      flags, decisionBy: c.user.name,
+      overrides: {
+        decision: ov.decision_override !== undefined ? ov.decision_override : existing.decision_override,
+        pictograms: ov.pictograms_override !== undefined ? ov.pictograms_override : existing.pictograms_override,
+      },
+    }));
   }
-  if (!sets.length) throw bad("Nothing to update");
-  await env.DB.batch([
-    env.DB.prepare(`UPDATE chemicals SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`).bind(...vals, id),
-    ...summaryStatements(env, { chemicalId: id }),
-  ]);
+  stmts.push(...summaryStatements(env, { chemicalId: id }));
+  await env.DB.batch(stmts);
   return json({ ok: true });
 }
 
@@ -545,6 +682,7 @@ function cleanLocation(b, { create }) {
     out.unit = u;
   }
   if (b.container_note !== undefined) out.container_note = cleanStr(b.container_note, 300, "Container note");
+  if (b.spill_compound !== undefined) out.spill_compound = cleanStr(b.spill_compound, 200, "Spill compound");
   return out;
 }
 
@@ -555,8 +693,8 @@ export async function handleAddLocation(c) {
   const chem = await env.DB.prepare("SELECT id FROM chemicals WHERE id = ?").bind(chemId).first();
   if (!chem) throw new ApiError(404, "Chemical not found");
   const r = await env.DB.prepare(
-    "INSERT INTO storage_locations (chemical_id, location, quantity, unit, container_note) VALUES (?, ?, ?, ?, ?)"
-  ).bind(chemId, f.location, f.quantity, f.unit, f.container_note ?? null).run();
+    "INSERT INTO storage_locations (chemical_id, location, spill_compound, quantity, unit, container_note) VALUES (?, ?, ?, ?, ?, ?)"
+  ).bind(chemId, f.location, f.spill_compound ?? null, f.quantity, f.unit, f.container_note ?? null).run();
   return json({ id: r.meta.last_row_id }, 201);
 }
 
@@ -581,34 +719,37 @@ export async function handleDeleteLocation(c) {
 
 // ---------------------------------------------------------------- handlers: manifest and export
 
-function dgSortKey(dg) {
-  const n = parseFloat(dg);
-  return Number.isFinite(n) ? n : Infinity;
+// One entry per storage location with a quantity, for computeSiteTotals (classification decides, not the decision).
+function siteEntry(r) {
+  return {
+    id: r.location_id ?? r.id, chemical_id: r.chemical_id, name: r.product_name, classification: parseJson(r.ghs_classification, null),
+    quantity: r.quantity, unit: r.unit, location: r.location, spill_compound: r.spill_compound,
+  };
 }
 
 export async function handleManifest(c) {
   const { env } = c;
   const { results } = await env.DB.prepare(
-    `SELECT l.id AS location_id, c.id AS chemical_id, c.product_name, c.supplier, l.location, l.quantity, l.unit, l.container_note,
-            s.dg_class, s.subsidiary_class, s.un_number, s.packing_group, s.hazchem_code, s.proper_shipping_name, s.signal_word, s.pictograms
-     FROM chemicals c JOIN storage_locations l ON l.chemical_id = c.id LEFT JOIN sds s ON s.id = c.sds_id
-     WHERE c.decision = 'hazardous'`
+    `SELECT l.id AS location_id, c.id AS chemical_id, c.product_name, c.supplier, c.decision, c.ghs_classification, c.signal_word, c.pictograms,
+            l.location, l.spill_compound, l.quantity, l.unit, l.container_note,
+            s.dg_class, s.subsidiary_class, s.un_number, s.packing_group, s.hazchem_code, s.proper_shipping_name
+     FROM storage_locations l JOIN chemicals c ON c.id = l.chemical_id LEFT JOIN sds s ON s.id = c.sds_id`
   ).all();
-  const rows = results.sort((a, b) => {
-    const d = dgSortKey(a.dg_class) - dgSortKey(b.dg_class);
-    if (d) return d;
-    return String(a.product_name).toLowerCase().localeCompare(String(b.product_name).toLowerCase()) || a.location_id - b.location_id;
-  });
-  const totals = new Map();
-  for (const r of rows) {
-    const key = r.dg_class && String(r.dg_class).trim() ? String(r.dg_class).trim() : "Unclassified";
-    const t = totals.get(key) || { dg_class: key, litres: 0, kg: 0 };
-    if (r.unit === "kg") t.kg += r.quantity; else t.litres += r.quantity;
-    totals.set(key, t);
+  const totals = computeSiteTotals(results.filter(r => r.quantity > 0).map(siteEntry));
+  const itemsByLocation = new Map();
+  for (const t of totals.items) for (const k of t.contributors) {
+    if (!k.counted || k.location_id == null) continue;
+    const set = itemsByLocation.get(k.location_id) || new Set();
+    set.add(t.item); itemsByLocation.set(k.location_id, set);
   }
-  const totalList = [...totals.values()].map(t => ({ ...t, litres: Math.round(t.litres * 1000) / 1000, kg: Math.round(t.kg * 1000) / 1000 }))
-    .sort((a, b) => dgSortKey(a.dg_class === "Unclassified" ? "" : a.dg_class) - dgSortKey(b.dg_class === "Unclassified" ? "" : b.dg_class));
-  return json({ generated_at: nowIso(), rows, totals: totalList });
+  const rows = results.filter(r => r.decision === "hazardous").map(r => ({
+    location_id: r.location_id, chemical_id: r.chemical_id, product_name: r.product_name, supplier: r.supplier, location: r.location,
+    spill_compound: r.spill_compound, quantity: r.quantity, unit: r.unit, container_note: r.container_note,
+    classification: parseJson(r.ghs_classification, null), items: [...(itemsByLocation.get(r.location_id) || [])].sort((a, b) => a - b),
+    un_number: r.un_number, dg_class: r.dg_class, subsidiary_class: r.subsidiary_class, packing_group: r.packing_group,
+    hazchem_code: r.hazchem_code, proper_shipping_name: r.proper_shipping_name, signal_word: r.signal_word, pictograms: r.pictograms,
+  })).sort((a, b) => String(a.product_name).toLowerCase().localeCompare(String(b.product_name).toLowerCase()) || a.location_id - b.location_id);
+  return json({ generated_at: nowIso(), rows, totals });
 }
 
 export async function handleExportAll(c) {
@@ -617,15 +758,16 @@ export async function handleExportAll(c) {
   const [chems, locs, assess, ctl, sdsFiles, settings] = await Promise.all([
     env.DB.prepare(
       `SELECT c.id, c.product_name, c.supplier, c.synonyms, c.product_codes, c.use_description, c.physical_form, c.decision,
-         c.decision_note, c.decision_by, c.decision_at, c.sds_id, c.sds_issue_date, c.review_due, c.risk_level, c.source,
+         c.decision_note, c.decision_by, c.decision_at, c.ghs_classification, c.classification_flags, c.decision_override,
+         c.pictograms_override, c.signal_word, c.pictograms, c.sds_id, c.sds_issue_date, c.review_due, c.risk_level, c.source,
          c.created_at, c.updated_at,
          s.title AS sds_title, s.version_no AS sds_version_no, s.file_name AS sds_file_name, s.revision, s.emergency_phone,
-         s.signal_word, s.hazard_classification, s.h_statements, s.p_statements, s.poison_schedule, s.un_number, s.dg_class,
-         s.subsidiary_class, s.packing_group, s.hazchem_code, s.proper_shipping_name, s.pictograms, s.cas_numbers
+         s.signal_word AS sds_signal_word, s.hazard_classification, s.h_statements, s.p_statements, s.poison_schedule, s.un_number, s.dg_class,
+         s.subsidiary_class, s.packing_group, s.hazchem_code, s.proper_shipping_name, s.cas_numbers
        FROM chemicals c LEFT JOIN sds s ON s.id = c.sds_id ORDER BY c.product_name COLLATE NOCASE, c.id`
     ).all(),
     env.DB.prepare(
-      `SELECT l.id, l.chemical_id, l.location, l.quantity, l.unit, l.container_note
+      `SELECT l.id, l.chemical_id, l.location, l.spill_compound, l.quantity, l.unit, l.container_note
        FROM chemicals c JOIN storage_locations l ON l.chemical_id = c.id ORDER BY c.id, l.id`
     ).all(),
     env.DB.prepare(
@@ -646,8 +788,20 @@ export async function handleExportAll(c) {
   const names = new Map();
   const chemicals = chems.results.map(r => {
     if (r.sds_id) { const a = names.get(r.sds_id) || []; a.push(r.product_name); names.set(r.sds_id, a); }
-    return { ...r, review_status: reviewStatus(r.review_due, r.sds_id, today) };
+    const cls = parseJson(r.ghs_classification, null);
+    const eff = effective(cls, { decision: r.decision_override, pictograms: overrideTextToValue(r.pictograms_override) });
+    const { ghs_classification, ...rest } = r;
+    return {
+      ...rest, classification: cls, classification_flags: parseJson(r.classification_flags, []),
+      decision_overridden: eff.decision_overridden, pictograms_overridden: eff.pictograms_overridden,
+      review_status: reviewStatus(r.review_due, r.sds_id, today),
+    };
   });
+  const chemById = new Map(chemicals.map(ch => [ch.id, ch]));
+  const manifestTotals = computeSiteTotals(locs.results.filter(l => l.quantity > 0).map(l => {
+    const ch = chemById.get(l.chemical_id);
+    return { id: l.id, chemical_id: l.chemical_id, name: ch ? ch.product_name : "", classification: ch ? ch.classification : null, quantity: l.quantity, unit: l.unit, location: l.location, spill_compound: l.spill_compound };
+  }));
   const byAssessment = new Map();
   for (const r of ctl.results) { const a = byAssessment.get(r.assessment_id) || []; a.push({ kind: r.kind, label: r.label }); byAssessment.set(r.assessment_id, a); }
   const assessments = assess.results.map(a => ({ ...a, controls: byAssessment.get(a.id) || [] }));
@@ -659,6 +813,7 @@ export async function handleExportAll(c) {
     },
     chemicals,
     locations: locs.results,
+    manifest_totals: manifestTotals,
     assessments,
     sds_files: sdsFiles.results.map(s => ({ sds_id: s.id, file_name: s.file_name, product_names: names.get(s.id) || [], has_file: !!s.has_file })),
   });

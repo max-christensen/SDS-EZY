@@ -1,5 +1,7 @@
 # SDS EZY: architecture and API contract
 
+> **Superseded in part by [GHS-CHANGE.md](GHS-CHANGE.md):** pictograms are the nine official GHS images (GHS01 to GHS09), classification is stored as GHS class and category and drives the pictograms, signal word and decision, and placard and manifest quantities are totalled per Schedule 11 item (not by ADG class). Where the two documents disagree, GHS-CHANGE.md wins.
+
 A chemical register plus a hazard risk assessment for each chemical. Someone uploads a safety data sheet (SDS),
 the app reads it, drafts the assessment and adds it all to the register. **Out of scope:** work instructions,
 SOPs, JSEAs, SWMS (a different product), scheduling, clients, jobs, calendars.

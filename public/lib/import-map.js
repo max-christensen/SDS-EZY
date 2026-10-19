@@ -13,7 +13,7 @@
     { key: "quantity", label: "Quantity", aliases: ["quantity", "qty", "amount", "volume", "max quantity", "quantity held", "total quantity", "stock", "capacity", "size"] },
     { key: "unit", label: "Unit (L or kg)", aliases: ["unit", "units", "uom", "unit of measure", "l kg", "litres kg"] },
     { key: "un_number", label: "UN number", aliases: ["un number", "un no", "un", "un id", "un code", "unno"] },
-    { key: "dg_class", label: "DG class", aliases: ["dg class", "class", "dangerous goods class", "hazard class", "dg", "adg class", "primary class"] },
+    { key: "dg_class", label: "ADG class (illustration only)", aliases: ["dg class", "class", "dangerous goods class", "hazard class", "dg", "adg class", "primary class"] },
     { key: "packing_group", label: "Packing group", aliases: ["packing group", "pg", "packing grp", "pack group"] },
     { key: "hazchem_code", label: "Hazchem code", aliases: ["hazchem", "hazchem code", "emergency action code", "eac"] },
     { key: "sds_date", label: "SDS date", aliases: ["sds date", "sds issue date", "issue date", "date of issue", "sds revision date", "revision date", "date", "sds issued", "sds dated", "issued"] },

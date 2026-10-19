@@ -79,7 +79,7 @@
     }
   }
 
-  function readme(disclaimerFull, companyName, generated, count, missing) {
+  function readme(disclaimerFull, companyName, generated, count, missing, source) {
     const lines = ["SDS EZY - take-away safety data sheets"];
     if (companyName) lines.push("Business: " + companyName);
     lines.push(
@@ -88,6 +88,8 @@
       "",
       "IMPORTANT",
       disclaimerFull,
+      "",
+      source || "",
       "",
       "Each file is named after the product it covers. A sheet shared by several products carries all their names."
     );

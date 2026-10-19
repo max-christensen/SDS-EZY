@@ -7,6 +7,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pbkdf2Sync } from 'node:crypto';
 import { build } from '../scripts/make-demo.mjs';
+import { effective, derive, normaliseClassification, verifyClassification, computeSiteTotals, PICTOGRAM_CODES } from '../public/lib/ghs-ref.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TODAY = '2026-10-19';
@@ -83,18 +84,65 @@ test('each risk level is represented several times', { skip }, () => {
   }
 });
 
-test('summary columns match the current SDS and current assessment', { skip }, () => {
+test('summary columns match the current SDS, the current assessment and the GHS derivation', { skip }, () => {
   const db = openDb();
   const bad = all(db, `SELECT c.id FROM chemicals c JOIN sds s ON s.id = c.sds_id
-    WHERE s.is_current != 1 OR c.sds_issue_date IS NOT s.issue_date OR c.review_due IS NOT s.review_due
-       OR c.dg_class IS NOT s.dg_class OR c.signal_word IS NOT s.signal_word OR c.pictograms IS NOT s.pictograms`);
+    WHERE s.is_current != 1 OR c.sds_issue_date IS NOT s.issue_date OR c.review_due IS NOT s.review_due OR c.dg_class IS NOT s.dg_class`);
   assert.deepEqual(bad, []);
+  // decision, signal word and pictograms are exactly what the Worker would compute from the classification and the overrides
+  for (const c of all(db, 'SELECT * FROM chemicals')) {
+    const cl = c.ghs_classification === null ? null : JSON.parse(c.ghs_classification);
+    const e = effective(cl, { decision: c.decision_override, pictograms: c.pictograms_override });
+    assert.equal(c.decision, e.decision, c.product_name + ' decision');
+    assert.equal(c.signal_word, e.signal_word, c.product_name + ' signal word');
+    assert.equal(c.pictograms, e.pictograms.length ? e.pictograms.join(',') : null, c.product_name + ' pictograms');
+    if (c.pictograms) for (const p of c.pictograms.split(',')) assert.ok(PICTOGRAM_CODES.includes(p));
+    if (cl) assert.deepEqual(normaliseClassification(cl).dropped, [], c.product_name);
+  }
+  assert.deepEqual(all(db, "SELECT id FROM sds WHERE signal_word IS NOT NULL AND signal_word NOT IN ('Danger','Warning')"), []);
+  const cols = all(db, 'PRAGMA table_info(sds)').map(r => r.name);
+  assert.ok(!cols.includes('pictograms') && !cols.includes('hazardous'));
   const badRisk = all(db, `SELECT c.id FROM chemicals c LEFT JOIN assessments a ON a.chemical_id = c.id AND a.is_current = 1
     WHERE c.risk_level IS NOT a.risk_level`);
   assert.deepEqual(badRisk, []);
   assert.deepEqual(all(db, 'SELECT chemical_id FROM assessments WHERE is_current = 1 GROUP BY chemical_id HAVING COUNT(*) > 1'), []);
   const noCurrent = all(db, 'SELECT id, product_name FROM chemicals WHERE sds_id IS NOT NULL AND id NOT IN (SELECT chemical_id FROM assessments WHERE is_current = 1)');
   assert.deepEqual(noCurrent, []);
+});
+
+test('classification: one unclassified, one decision override, one pictogram override (GHS09 only by override), one flagged', { skip }, () => {
+  const db = openDb();
+  const rows = all(db, 'SELECT * FROM chemicals');
+  const unclassified = rows.filter(r => r.ghs_classification === null);
+  assert.equal(unclassified.length, 1);
+  assert.equal(unclassified[0].decision, null);
+  assert.ok(rows.filter(r => r.ghs_classification === '[]').every(r => r.decision === 'not_hazardous' || r.decision_override === 'hazardous'));
+  const dOv = rows.filter(r => r.decision_override);
+  assert.equal(dOv.length, 1);
+  assert.equal(effective(JSON.parse(dOv[0].ghs_classification), { decision: dOv[0].decision_override }).decision_overridden, true);
+  const pOv = rows.filter(r => r.pictograms_override);
+  assert.equal(pOv.length, 1);
+  assert.equal(effective(JSON.parse(pOv[0].ghs_classification), { pictograms: pOv[0].pictograms_override }).pictograms_overridden, true);
+  assert.ok(pOv[0].pictograms.includes('GHS09'));
+  for (const r of rows) if (r.pictograms && r.pictograms.includes('GHS09')) assert.ok(r.pictograms_override, 'GHS09 is never derived: ' + r.product_name);
+  const flagged = rows.filter(r => r.classification_flags);
+  assert.equal(flagged.length, 1);
+  assert.ok(JSON.parse(flagged[0].ghs_classification).some(e => e.check === true));
+  assert.equal(one(db, 'SELECT unverified u FROM sds WHERE id = ?', flagged[0].sds_id).u, '["classification"]');
+  const noSds = rows.filter(r => r.sds_id === null);
+  assert.equal(noSds.length, 1);
+  assert.equal(JSON.parse(noSds[0].ghs_classification)[0].src, 'admin');
+});
+
+test('classification examples match what the product really is', { skip }, () => {
+  const db = openDb();
+  const cl = name => JSON.parse(one(db, 'SELECT ghs_classification g FROM chemicals WHERE product_name LIKE ?', name).g).map(e => e.c + ':' + e.k);
+  for (const k of ['flam_liq:2', 'eye_dmg:2A', 'stot_se:3']) assert.ok(cl('%Lacquer Thinners%').includes(k));
+  assert.ok(cl('%Spray Enamel%').includes('aerosol:1'));
+  for (const k of ['skin_corr:1A', 'corr_metal:1']) assert.ok(cl('%Battery Acid%').includes(k));
+  for (const k of ['eye_dmg:1', 'skin_sens:1', 'stot_se:3']) assert.ok(cl('%General Purpose Cement%').includes(k));
+  assert.deepEqual(cl('%PVA Wood Glue%'), []);
+  assert.equal(one(db, "SELECT decision d FROM chemicals WHERE product_name LIKE '%PVA Wood Glue%'").d, 'not_hazardous');
 });
 
 test('search_text is lower-case and holds name, supplier, codes and CAS', { skip }, () => {
@@ -121,21 +169,36 @@ test('SDS version history: v1 replaced by v2, chemical points at v2', { skip }, 
   assert.equal(one(db, 'SELECT COUNT(*) n FROM assessments WHERE sds_id = ? AND is_current = 0', v[0].id).n, 1);
 });
 
-test('manifest query returns class totals in L and kg', { skip }, () => {
+test('site totals: exactly which items are over their placard and manifest quantities', { skip }, () => {
   const db = openDb();
-  const totals = all(db, `SELECT COALESCE(NULLIF(c.dg_class,''),'Unclassified') AS dg_class,
-      SUM(CASE WHEN l.unit='L' THEN l.quantity ELSE 0 END) AS litres,
-      SUM(CASE WHEN l.unit='kg' THEN l.quantity ELSE 0 END) AS kg
-    FROM storage_locations l JOIN chemicals c ON c.id = l.chemical_id
-    WHERE c.decision = 'hazardous' GROUP BY 1 ORDER BY 1`);
-  const classes = totals.map(t => t.dg_class);
-  for (const k of ['2.1', '2.2', '3', '5.1', '8', '9', 'Unclassified']) assert.ok(classes.includes(k), 'missing class ' + k + ' in ' + classes);
-  const cls3 = totals.find(t => t.dg_class === '3');
-  assert.ok(cls3.litres > 100);
-  assert.ok(totals.find(t => t.dg_class === '2.1').kg > 0, 'LPG/acetylene in kg');
-  assert.ok(totals.find(t => t.dg_class === 'Unclassified').kg > 50);
-  // locations belong to chemicals, several chemicals have more than one location
-  assert.ok(one(db, 'SELECT COUNT(*) n FROM (SELECT chemical_id FROM storage_locations GROUP BY chemical_id HAVING COUNT(*) > 1)').n >= 5);
+  const entries = all(db, `SELECT l.id, l.chemical_id, c.product_name name, c.ghs_classification g, l.quantity, l.unit, l.location, l.spill_compound
+    FROM storage_locations l JOIN chemicals c ON c.id = l.chemical_id`).map(r => ({ id: r.id, chemical_id: r.chemical_id, name: r.name, classification: r.g === null ? null : JSON.parse(r.g), quantity: r.quantity, unit: r.unit, location: r.location, spill_compound: r.spill_compound }));
+  const t = computeSiteTotals(entries);
+  const item = n => t.items.find(i => i.item === n);
+  // (a) over the PLACARD quantity: item 1 on its own, and mixing item 9 only through the combination
+  assert.deepEqual(t.items.filter(i => i.placardOver).map(i => i.item), [1, 9]);
+  assert.deepEqual(t.items.filter(i => i.manifestOver).map(i => i.item), [], 'nothing over a manifest quantity');
+  assert.equal(item(1).total, 250);
+  // (b) mixing item 9: items 6, 7, 8 are each within their own placard quantity, the sum is not
+  assert.equal(item(6).total, 45); assert.equal(item(7).total, 64);
+  assert.ok(item(8).total > 900 && item(8).total <= 1000, 'item 8 ' + item(8).total);
+  assert.ok(!item(6).placardOver && !item(7).placardOver && !item(8).placardOver);
+  assert.equal(item(9).mixApplies.placard, true);
+  assert.ok(item(9).total > 1000 && item(9).total < 1100, 'item 9 ' + item(9).total);
+  // (c) category 4 decking oil in the same spill compound as category 3 stains counts as category 3 (item 8); the yard-shelf tin stays item 10
+  const deck8 = item(8).contributors.filter(c => /Decking Oil/.test(c.name));
+  assert.equal(deck8.length, 1);
+  assert.equal(item(10).total, 10);
+  assert.ok(item(10).contributors.length === 1 && /Decking Oil/.test(item(10).contributors[0].name));
+  // (d) one kg-versus-litre mismatch: the 9 kg LPG cylinder is not counted in item 1 (litres) and is reported
+  const mism = t.issues.filter(i => i.code === 'unit_mismatch');
+  assert.equal(mism.length, 1); assert.match(mism[0].name, /LPG/);
+  assert.equal(item(1).contributors.filter(c => c.counted === false).length, 1);
+  assert.equal(t.issues.filter(i => i.code === 'no_classification').length, 1);
+  // (e) everything else is comfortably under (at most a quarter of its placard quantity)
+  for (const i of t.items) if (![1, 6, 7, 8, 9].includes(i.item) && !i.isMix) assert.ok(i.total <= i.def.placard * 0.25, `item ${i.item} ${i.total}`);
+  assert.ok(t.items.filter(i => i.total > 0).length >= 10, 'a spread of items');
+  assert.equal(t.items.length, 43);
 });
 
 test('assessment controls resolve to seeded options', { skip }, () => {
@@ -215,4 +278,48 @@ test('dates move with --today so the status counts stay stable', async () => {
     assert.equal(s.review.overdue, summary.review.overdue);
     assert.equal(s.review.due_soon, summary.review.due_soon);
   } finally { rmSync(out3, { recursive: true, force: true }); }
+});
+
+test('every demo SDS text agrees with its stored classification (verifyClassification)', { skip }, async () => {
+  const db = openDb();
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const textOf = async path => {
+    const pdf = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(path)), useSystemFonts: true, verbosity: 0 }).promise;
+    let text = '';
+    for (let p = 1; p <= pdf.numPages; p++) {
+      let lastY = null;
+      for (const it of (await (await pdf.getPage(p)).getTextContent()).items) {
+        const y = Math.round(it.transform[5]);
+        text += (lastY !== null && y !== lastY ? '\n' : (text && !text.endsWith('\n') ? ' ' : '')) + it.str; lastY = y;
+      }
+      text += '\n';
+    }
+    return text;
+  };
+  const rows = all(db, 'SELECT c.product_name, c.ghs_classification g, c.classification_flags f, s.id sid, s.r2_key FROM chemicals c JOIN sds s ON s.id = c.sds_id WHERE c.ghs_classification IS NOT NULL');
+  const done = new Set();
+  let flaggedSeen = 0;
+  for (const r of rows) {
+    if (done.has(r.sid)) continue;
+    done.add(r.sid);
+    const text = await textOf(join(out, 'pdfs', r.r2_key));
+    const stored = JSON.parse(r.g);
+    const v = verifyClassification(stored, text);
+    assert.deepEqual(v.removed, [], r.product_name);
+    if (r.f) {
+      flaggedSeen++;
+      assert.deepEqual(v.flags, JSON.parse(r.f), 'stored flags equal what verification finds');
+      assert.ok(v.list.some(e => e.check));
+    } else {
+      assert.deepEqual(v.flags, [], r.product_name + ' ' + v.flags.join(' | '));
+      assert.deepEqual(v.list.map(e => e.c + ':' + e.k).sort(), stored.map(e => e.c + ':' + e.k).sort(), r.product_name);
+      assert.ok(!v.list.some(e => e.check));
+    }
+    const d = derive(stored);
+    assert.match(text, new RegExp('Signal word:\\s+' + (d.signal_word || 'None')));
+    for (const p of d.pictograms) assert.ok(text.includes(p + ' '), r.product_name + ' prints ' + p);
+    if (stored.length) assert.match(text, /\(H\d{3}[A-Za-z]?(, H\d{3}[A-Za-z]?)*\)/);
+  }
+  assert.equal(flaggedSeen, 1);
+  assert.ok(done.size >= 40);
 });

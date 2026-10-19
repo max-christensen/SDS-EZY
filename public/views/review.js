@@ -5,7 +5,7 @@
     { key: 'overdue', title: 'SDS review overdue', hint: 'The safety data sheet is more than 5 years old. Get a new one from the supplier.', tile: 'Overdue', cls: 'hot' },
     { key: 'due_soon', title: 'SDS review due soon', hint: 'These will be 5 years old within 90 days.', tile: 'Due soon', cls: 'warm' },
     { key: 'no_sds', title: 'No SDS on file', hint: 'There is no safety data sheet attached to these chemicals yet.', tile: 'No SDS', cls: 'warm' },
-    { key: 'no_decision', title: 'Not checked yet', hint: 'Nobody has decided yet whether these are hazardous or not.', tile: 'Not checked yet', cls: '' },
+    { key: 'no_decision', title: 'Not classified yet', hint: 'These have not been classified yet, so there is no hazardous or not hazardous decision.', tile: 'Not classified yet', cls: '' },
   ];
 
   function rowHtml(r, key) {

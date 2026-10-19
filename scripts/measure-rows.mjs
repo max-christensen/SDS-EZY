@@ -50,15 +50,15 @@ async function topUp(target) {
     if (hasSds) {
       const s = await call("POST", "/api/sds", pdfForm(n, {
         title: `Measure item ${n}`, supplier: `Supplier ${n % 17}`, issue_date: `${year}-0${1 + (n % 9)}-15`,
-        dg_class: classes[n % classes.length] || undefined, pictograms: "flame,exclamation", signal_word: "Warning", cas_numbers: "67-64-1",
+        dg_class: classes[n % classes.length] || undefined, signal_word: "Warning", cas_numbers: "67-64-1",
       }));
       sdsId = s.data.id;
     }
     const c = await call("POST", "/api/chemicals", {
-      product_name: `Measure item ${n}`, supplier: `Supplier ${n % 17}`, decision: n % 7 === 0 ? null : (n % 2 ? "hazardous" : "not_hazardous"),
+      product_name: `Measure item ${n}`, supplier: `Supplier ${n % 17}`, ghs_classification: n % 7 === 0 ? null : (n % 2 ? [{ c: "flam_liq", k: String(1 + (n % 4)) }, { c: "eye_dmg", k: "2A" }] : []),
       synonyms: "synonym alpha, synonym beta", product_codes: `P-${n}`, sds_id: sdsId,
     });
-    await call("POST", `/api/chemicals/${c.data.id}/locations`, { location: `Store ${n % 9}`, quantity: 5 + (n % 20), unit: n % 3 ? "L" : "kg" });
+    await call("POST", `/api/chemicals/${c.data.id}/locations`, { location: `Store ${n % 9}`, spill_compound: n % 5 === 0 ? "Bund A" : undefined, quantity: 5 + (n % 20), unit: n % 3 ? "L" : "kg" });
     if (n % 2 === 0) await call("POST", `/api/chemicals/${c.data.id}/assessments`, { risk_level: "significant_controlled", control_option_ids: [1, 6] });
   }
 }

@@ -8,7 +8,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMPANY, SUPPLIERS } from './demo/text.mjs';
 import { SDS, CHEMICALS, USERS, DEMO_PASSWORD } from './demo/data.mjs';
-import { buildSdsPdf, hList, pList, classificationText } from './demo/pdf.mjs';
+import { buildSdsPdf, hList, pList, classificationText, derivedFor } from './demo/pdf.mjs';
+import { UNCONFIRMED_CATEGORY } from './demo/classes.mjs';
+import { effective, derive, parsePictogramList, classificationLabel, computeSiteTotals } from '../public/lib/ghs-ref.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sha = s => createHash('sha256').update(s).digest('hex');
@@ -159,15 +161,14 @@ export async function build({ today, outDir, log = () => {} }) {
       file_size: pdf.length, file_hash: createHash('sha256').update(pdf).digest('hex'),
       issue_date: issue, revision: s.rev, emergency_phone: SUPPLIERS[s.s].phone,
       review_due: issue ? reviewDue(issue) : null,
-      signal_word: s.hz ? s.sig : null,
+      signal_word: s.hz ? derivedFor(s).signal_word : null,
       hazard_classification: s.hz ? classificationText(s) : 'Not classified as hazardous',
       h_statements: s.hz ? hList(s).join('; ') : null,
       p_statements: s.hz ? pList(s).join('; ') : null,
       poison_schedule: s.ps || null,
       un_number: un, dg_class: cls, subsidiary_class: sub || null, packing_group: pg || null, hazchem_code: hc, proper_shipping_name: psn,
-      pictograms: s.hz ? s.pic.join(',') : null,
-      cas_numbers: s.cas.join(','), unverified: null, source: 'demo', ai_provider: null,
-      hazardous: s.hz ? 1 : 0, uploaded_by: 1, uploaded_at: uploaded,
+      cas_numbers: s.cas.join(','), unverified: UNCONFIRMED_CATEGORY[s.k] ? JSON.stringify(['classification']) : null, source: 'demo', ai_provider: null,
+      uploaded_by: 1, uploaded_at: uploaded,
       replaced_at: null,
     };
     sdsRows.push(row_); sdsByKey[s.k] = row_;
@@ -183,8 +184,20 @@ export async function build({ today, outDir, log = () => {} }) {
     const id = i + 1;
     const spec = c.sds ? SDS.find(x => x.k === c.sds) : null;
     const sdsRow = c.sds ? sdsByKey[c.sds] : null;
-    const dec = 'dec' in c ? c.dec : (spec ? (spec.hz ? 'h' : 'n') : null);
-    const decision = dec === 'h' ? 'hazardous' : dec === 'n' ? 'not_hazardous' : null;
+    // GHS classification (null = not classified yet), then the effective decision / signal word / pictograms exactly as the Worker computes them
+    let cl;
+    if (c.unclassified) cl = null;
+    else if (c.classification === 'admin') cl = [{ c: 'flam_liq', k: '3', src: 'admin' }];
+    else cl = spec.cls.map(([cc, k]) => {
+      const e = { c: cc, k, src: 'ai' };
+      if (UNCONFIRMED_CATEGORY[c.sds] && UNCONFIRMED_CATEGORY[c.sds].c === cc) e.check = true;
+      return e;
+    });
+    const flags = cl && cl.some(e => e.check) ? cl.filter(e => e.check).map(e => classificationLabel(e) + ': the hazard statement is in the SDS but the category could not be confirmed from the text. Check it against SDS section 2.') : null;
+    const dv0 = derive(cl);
+    const pOverride = c.pictograms_add ? dv0.pictograms.concat(c.pictograms_add).filter((x, ix, arr) => arr.indexOf(x) === ix).sort().join(',') : null;
+    const eff = effective(cl, { decision: c.decision_override || null, pictograms: pOverride });
+    const decision = eff.decision;
     const a = c.risk && !(c.blank) ? assessmentFor(c, spec, {}) : null;
     const form = c.form || spec?.form || 'other';
     const riskLevel = c.blank ? 'uncertain' : a ? a.risk_level : null;
@@ -193,14 +206,16 @@ export async function build({ today, outDir, log = () => {} }) {
     const created = iso(addDays(T, -380 + i)) + ' 08:00:00';
     chemRows.push({
       id, product_name: c.n, supplier: sdsRow ? sdsRow.supplier : (c.supplier || null), synonyms: c.syn || null, product_codes: c.codes || null,
-      use_description: c.use, physical_form: form, decision,
-      decision_note: decision === 'hazardous' ? (c.note || 'Classified as hazardous per SDS section 2') : decision === 'not_hazardous' ? 'Not classified as hazardous per SDS section 2' : null,
+      use_description: c.use, physical_form: form,
+      ghs_classification: cl === null ? null : JSON.stringify(cl), classification_flags: flags ? JSON.stringify(flags) : null,
+      decision_override: c.decision_override || null, pictograms_override: pOverride, decision,
+      decision_note: c.note || (decision === 'hazardous' ? 'Derived from the GHS classification (SDS section 2)' : decision === 'not_hazardous' ? 'No GHS classification applies per SDS section 2' : null),
       decision_by: decision ? 'Demo Admin' : null, decision_at: decision ? created : null,
       sds_id: sdsRow ? sdsRow.id : null, sds_issue_date: sdsRow ? sdsRow.issue_date : null, review_due: sdsRow ? sdsRow.review_due : null,
-      risk_level: riskLevel, dg_class: sdsRow ? sdsRow.dg_class : null, signal_word: sdsRow ? sdsRow.signal_word : null, pictograms: sdsRow ? sdsRow.pictograms : null,
+      risk_level: riskLevel, dg_class: sdsRow ? sdsRow.dg_class : null, signal_word: eff.signal_word, pictograms: eff.pictograms.length ? eff.pictograms.join(',') : null,
       source: 'demo', search_text: search, created_by: 1, created_at: created, updated_at: created,
     });
-    for (const [location, quantity, unit, note] of c.locs || []) locRows.push({ id: lId++, chemical_id: id, location, quantity, unit, container_note: note, created_at: created });
+    for (const [location, quantity, unit, note, compound] of c.locs || []) locRows.push({ id: lId++, chemical_id: id, location, quantity, unit, container_note: note, spill_compound: compound || null, created_at: created });
 
     const issued = sdsRow && sdsRow.issue_date ? parse(sdsRow.issue_date) : addDays(T, -300);
     const assessed = iso(new Date(Math.min(addDays(issued, 21 + (i * 11) % 120).getTime(), addDays(T, -5).getTime())));
@@ -258,6 +273,13 @@ export async function build({ today, outDir, log = () => {} }) {
     summary.risk[c.risk_level || 'none'] = (summary.risk[c.risk_level || 'none'] || 0) + 1;
     summary.decisions[c.decision || 'none'] = (summary.decisions[c.decision || 'none'] || 0) + 1;
   }
+  const entries = locRows.map(l => { const ch = chemRows[l.chemical_id - 1]; return { id: l.id, chemical_id: ch.id, name: ch.product_name, classification: ch.ghs_classification ? JSON.parse(ch.ghs_classification) : null, quantity: l.quantity, unit: l.unit, location: l.location, spill_compound: l.spill_compound }; });
+  const site = computeSiteTotals(entries);
+  summary.overrides = { decision: chemRows.filter(c => c.decision_override).length, pictograms: chemRows.filter(c => c.pictograms_override).length };
+  summary.flagged = chemRows.filter(c => c.classification_flags).length;
+  summary.not_classified = chemRows.filter(c => c.ghs_classification === null).length;
+  summary.over = site.items.filter(t => t.placardOver || t.manifestOver).map(t => ({ item: t.item, total: t.total, placard: t.def.placard, manifest: t.def.manifest, placardOver: t.placardOver, manifestOver: t.manifestOver }));
+  summary.site_issues = site.issues.map(i => i.code).sort().reduce((m, c) => (m[c] = (m[c] || 0) + 1, m), {});
   writeFileSync(join(out, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
   if (!existsSync(join(out, '.gitignore'))) writeFileSync(join(out, '.gitignore'), '*\n!.gitignore\n');
   log(JSON.stringify(summary, null, 2));

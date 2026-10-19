@@ -5,7 +5,9 @@
 //   createSds(env, fields, {bytes, fileName, userId, chemicalIds, source}) -> id
 //        fields: any sds columns (title, supplier, issue_date, revision, emergency_phone, review_due, signal_word,
 //        hazard_classification, h_statements, p_statements, poison_schedule, un_number, dg_class, subsidiary_class,
-//        packing_group, hazchem_code, proper_shipping_name, pictograms, cas_numbers, unverified[], ai_provider, hazardous).
+//        packing_group, hazchem_code, proper_shipping_name, cas_numbers, unverified[], ai_provider). Pictograms and the
+//        hazardous decision are NOT SDS fields any more: they come from the chemical's GHS classification (a stray
+//        `pictograms` / `hazardous` key is ignored).
 //        review_due defaults to issue_date + 5 years. bytes (Uint8Array/ArrayBuffer) is stored in R2 as sds/<id>-<random>.pdf.
 //        chemicalIds are pointed at the new SDS and their summary columns refreshed.
 //   replaceSds(env, oldSdsId, fields, {bytes, fileName, userId, source}) -> new id
@@ -16,7 +18,7 @@
 
 import { json, loadSettings, addYearsIso } from "./lib.js";
 import {
-  ApiError, bad, readJson, cleanStr, cleanEnum, cleanDate, cleanId, PICTOGRAMS, SOURCES,
+  ApiError, bad, readJson, cleanStr, cleanEnum, cleanDate, cleanId, SOURCES,
   summaryStatements, SDS_PUBLIC,
 } from "./register.js";
 
@@ -73,12 +75,6 @@ export function cleanSds(b, { partial = false } = {}) {
     out.dg_class = d;
   }
   if (b.packing_group !== undefined) out.packing_group = cleanEnum(b.packing_group, ["I", "II", "III"], "Packing group");
-  if (b.pictograms !== undefined) {
-    const raw = Array.isArray(b.pictograms) ? b.pictograms : String(b.pictograms || "").split(",");
-    const list = [...new Set(raw.map(x => String(x).trim().toLowerCase()).filter(Boolean))];
-    for (const p of list) if (!PICTOGRAMS.includes(p)) throw bad(`Unknown pictogram "${p}"`);
-    out.pictograms = list.length ? list.join(",") : null;
-  }
   if (b.cas_numbers !== undefined) {
     const raw = Array.isArray(b.cas_numbers) ? b.cas_numbers : String(b.cas_numbers || "").split(/[,;\s]+/);
     const list = [...new Set(raw.map(x => String(x).trim()).filter(Boolean))];
@@ -90,19 +86,13 @@ export function cleanSds(b, { partial = false } = {}) {
     const arr = Array.isArray(b.unverified) ? b.unverified.filter(x => typeof x === "string").slice(0, 60) : [];
     out.unverified = arr.length ? JSON.stringify(arr) : null;
   }
-  if (b.hazardous !== undefined) {
-    if (b.hazardous === null) out.hazardous = null;
-    else if (b.hazardous === true || b.hazardous === 1 || b.hazardous === "1") out.hazardous = 1;
-    else if (b.hazardous === false || b.hazardous === 0 || b.hazardous === "0") out.hazardous = 0;
-    else throw bad("Hazardous must be yes, no or blank");
-  }
   if (!partial && Object.keys(out).length === 0 && !b.title) { /* an SDS with no fields is allowed (file only) */ }
   return out;
 }
 
 const SDS_COLS = ["title", "supplier", "issue_date", "revision", "emergency_phone", "review_due", "signal_word",
   "hazard_classification", "h_statements", "p_statements", "poison_schedule", "un_number", "dg_class", "subsidiary_class",
-  "packing_group", "hazchem_code", "proper_shipping_name", "pictograms", "cas_numbers", "unverified", "ai_provider", "hazardous"];
+  "packing_group", "hazchem_code", "proper_shipping_name", "cas_numbers", "unverified", "ai_provider"];
 
 function randomKey() { return crypto.randomUUID().replace(/-/g, ""); }
 

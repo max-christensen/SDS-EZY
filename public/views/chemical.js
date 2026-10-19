@@ -11,7 +11,7 @@
     issue_date: 'SDS issue date', revision: 'Revision', emergency_phone: 'Emergency phone', signal_word: 'Signal word',
     hazard_classification: 'Hazard classification', h_statements: 'Hazard statements', p_statements: 'Precautionary statements',
     poison_schedule: 'Poison schedule', un_number: 'UN number', dg_class: 'Dangerous goods class', subsidiary_class: 'Subsidiary class',
-    packing_group: 'Packing group', hazchem_code: 'Hazchem code', proper_shipping_name: 'Proper shipping name', pictograms: 'Pictograms',
+    packing_group: 'Packing group', hazchem_code: 'Hazchem code', proper_shipping_name: 'Proper shipping name',
     cas_numbers: 'CAS numbers', supplier: 'Supplier', title: 'Product name on the SDS', fire_response: 'Fire response', spill_response: 'Spill response',
     use_description: 'Description of use', controls_notes: 'Control notes', ppe_notes: 'PPE notes',
   };
@@ -73,9 +73,61 @@
   }
 
   function hazardSummaryLine(d) {
-    const s = d.sds || {};
-    const bits = [s.signal_word, s.dg_class ? 'DG class ' + s.dg_class : '', s.un_number ? 'UN ' + s.un_number : ''].filter(Boolean);
-    return `<div style="margin:6px 0 10px">${App.pictogramRow(s.pictograms, 34)} ${bits.length ? `<strong>${esc(bits.join(' · '))}</strong>` : ''}</div>`;
+    const c = d.chemical;
+    return `<div class="pa-head" style="margin:6px 0 10px">${App.pictogramRow(c.pictograms, 44)} ${c.signal_word ? `<strong>${esc(c.signal_word)}</strong>` : ''}</div>`;
+  }
+
+  // ------------------------------------------------------------ classification (from the Safe Work Australia poster)
+  const G = () => App.GHS;
+  function pList(v) { return G().parsePictogramList(v) || []; }
+  const hText = (code) => `<span class="hcode">${esc(code)}</span> ${esc(G().H_STATEMENTS[code] || '')}`;
+
+  // Table of each classified class and category: pictogram, signal word, H-code and hazard statement.
+  function classTableHtml(cls) {
+    const rows = [];
+    cls.forEach((e) => {
+      const unconfirmed = e.k == null;
+      G().rowsFor(e.c, unconfirmed ? null : String(e.k)).forEach((r, i) => rows.push({ e, r, first: i === 0, unconfirmed }));
+    });
+    if (!rows.length) return '';
+    return `<table class="rtable classtable"><thead><tr><th>Class and category</th><th>Pictogram</th><th>Signal word</th><th>Hazard statement</th></tr></thead><tbody>${rows.map(({ e, r, first, unconfirmed }) => {
+      const cat = unconfirmed ? '<span class="flag">Category not confirmed, check the SDS</span>' : esc(G().categoryText(r.categories.includes(String(e.k)) ? e.k : r.categories[0]));
+      const src = e.src === 'ai' ? 'read by the AI' : e.src === 'h_code' ? 'from the H-codes' : e.src === 'admin' ? 'added by an admin' : '';
+      return `<tr><td data-label="Class"><strong>${esc(r.classLabel)}</strong><br>${unconfirmed ? esc(r.categories.map(G().categoryText).join(' / ')) + (first ? '<br>' + cat : '') : cat}${e.check ? ' <span class="flag">Check this one</span>' : ''}${src ? `<br><span class="cls-src">${src}</span>` : ''}</td>
+        <td class="pic" data-label="Pictogram">${r.pictograms.length ? App.pictogramRow(r.pictograms, 44) : '<span class="muted">No pictogram</span>'}</td>
+        <td data-label="Signal word">${r.signal ? esc(r.signal) : '<span class="muted">No signal word</span>'}</td>
+        <td data-label="Hazard statement">${r.hCodes.length ? r.hCodes.map(hText).join('<br>') : '<span class="muted">None</span>'}${r.note ? `<div class="hint">${esc(r.note)}</div>` : ''}</td></tr>`;
+    }).join('')}</tbody></table>`;
+  }
+
+  // "Derived from the classification" or "Overridden by an admin (derived: ...)"
+  function provenance(overridden, derivedText) {
+    return overridden ? `<span class="ovr">Overridden by an admin</span> <span class="muted small-text">(derived: ${esc(derivedText)})</span>` : '<span class="muted small-text">Derived from the classification</span>';
+  }
+  const derivedPictText = (codes) => codes.length ? App.pictogramNames(codes) : 'none';
+
+  function classificationCard(d, admin) {
+    const c = d.chemical;
+    const cls = Array.isArray(c.classification) ? c.classification : null;
+    const flags = list(c.classification_flags);
+    const der = c.derived || {};
+    const derPict = pList(der.pictograms);
+    let h = `<section class="card" id="classCard"><div class="card-head"><h2>Classification <span class="count">(from the Safe Work Australia poster)</span></h2>${admin ? `<a class="btn no-print" href="#/chemical/${c.id}/edit?focus=classification">${cls === null ? 'Classify' : 'Edit classification'}</a>` : ''}</div>`;
+    if (flags.length) h += `<div class="notice warn" role="note"><strong>Check these details.</strong><ul style="margin:4px 0 0;padding-left:18px">${flags.map((f) => `<li>${esc(f)}</li>`).join('')}</ul></div>`;
+    if (cls === null) {
+      h += '<div class="notice"><strong>Not classified yet.</strong> Nobody has read the hazard classes and categories from the SDS (section 2), so there is no hazardous or not hazardous decision yet.</div>';
+    } else if (!cls.length) {
+      h += '<div class="notice"><strong>Classified: it carries none of the classifications, so it is non-hazardous.</strong></div>';
+    } else {
+      h += classTableHtml(cls);
+    }
+    h += `<dl class="kv" style="margin-top:14px">
+      <dt>Decision</dt><dd>${App.decisionBadge(c.decision)} ${provenance(c.decision_overridden, App.decisionLabel(der.decision || null))}${c.decision_by ? ` <span class="muted small-text">set by ${esc(c.decision_by)}${c.decision_at ? ' on ' + esc(App.fmtDate(c.decision_at)) : ''}</span>` : ''}</dd>
+      <dt>Pictograms</dt><dd>${App.pictogramRow(c.pictograms, 56) || '<span class="none">None</span>'} ${provenance(c.pictograms_overridden, derivedPictText(derPict))}</dd>
+      <dt>Signal word</dt><dd>${c.signal_word ? esc(c.signal_word) : '<span class="none">None</span>'} <span class="muted small-text">Derived from the classification</span></dd>
+      ${c.decision_note ? `<dt>Note</dt><dd>${nl(c.decision_note)}</dd>` : ''}
+    </dl></section>`;
+    return h;
   }
 
   function printAssessment(d) {
@@ -113,12 +165,14 @@
             ${admin ? `<a class="btn primary" href="#/chemical/${c.id}/edit">Edit</a>` : ''}
           </div></div>
         <div class="muted">${esc(c.supplier || 'Supplier not recorded')}</div>
-        <div class="badges">${App.decisionBadge(c.decision)}${App.reviewBadge(c.review_status, c.review_due)}${c.decision === 'not_hazardous' ? '' : App.riskBadge(a ? a.risk_level : c.risk_level)}</div>
+        <div class="badges">${App.decisionBadge(c.decision)}${App.overrideMark(c.decision_overridden, 'decision')}${App.reviewBadge(c.review_status, c.review_due)}${c.decision === 'not_hazardous' ? '' : App.riskBadge(a ? a.risk_level : c.risk_level)}</div>
       </div>
       ${App.disclaimerHtml()}`;
 
-    if (unvAll.length) {
-      html += `<div class="notice warn" role="note"><strong>Check these details.</strong> They were not found in the text of the SDS, so they have been left blank: ${unvAll.map((f) => esc(fieldName(f))).join(', ')}. Look at the SDS itself and fill them in.</div>`;
+    // Details to check: classification flags and anything the AI returned that was not in the SDS text (fields other than the classification, which has its own card)
+    const unvOther = unvAll.filter((f) => f !== 'classification');
+    if (unvOther.length) {
+      html += `<div class="notice warn" role="note"><strong>Check these details.</strong> They were not found in the text of the SDS, so they have been left blank: ${unvOther.map((f) => esc(fieldName(f))).join(', ')}. Look at the SDS itself and fill them in.</div>`;
     }
 
     // Product details
@@ -129,29 +183,12 @@
       ${kvRow('Product codes', c.product_codes)}
       ${kvRow('Form', c.physical_form)}
       ${kvRow('What it is used for', c.use_description)}
-      ${kvRow('Hazardous or not', { html: App.decisionBadge(c.decision) + (c.decision_by ? ` <span class="muted small-text">decided by ${esc(c.decision_by)}${c.decision_at ? ' on ' + esc(App.fmtDate(c.decision_at)) : ''}</span>` : '') })}
-      ${c.decision_note ? kvRow('Reason', c.decision_note) : ''}
+      ${kvRow('Hazardous or not', { html: App.decisionBadge(c.decision) + App.overrideMark(c.decision_overridden, 'decision') })}
     </dl></section>`;
 
-    // Hazard data
-    if (s) {
-      html += `<section class="card"><h2>Hazard information from the SDS</h2>
-        ${s.pictograms ? `<div style="margin-bottom:10px">${App.pictogramRow(s.pictograms, 56)}<div class="picto-names">${esc(App.pictogramNames(s.pictograms))}</div></div>` : (sdsUnv.has('pictograms') ? `<p>${FLAG}</p>` : '<p class="muted">No hazard pictograms recorded.</p>')}
-        <dl class="kv">
-          ${kvRow('Signal word', s.signal_word, 'signal_word', sdsUnv)}
-          ${kvRow('Hazard classification', s.hazard_classification, 'hazard_classification', sdsUnv)}
-          ${kvRow('Hazard statements', s.h_statements, 'h_statements', sdsUnv)}
-          ${kvRow('Precautionary statements', s.p_statements, 'p_statements', sdsUnv)}
-          ${kvRow('Poison schedule', s.poison_schedule, 'poison_schedule', sdsUnv)}
-          ${kvRow('CAS numbers', s.cas_numbers, 'cas_numbers', sdsUnv)}
-          ${kvRow('UN number', s.un_number, 'un_number', sdsUnv)}
-          ${kvRow('Dangerous goods class', s.dg_class, 'dg_class', sdsUnv)}
-          ${kvRow('Subsidiary class', s.subsidiary_class, 'subsidiary_class', sdsUnv)}
-          ${kvRow('Packing group', s.packing_group, 'packing_group', sdsUnv)}
-          ${kvRow('Hazchem code', s.hazchem_code, 'hazchem_code', sdsUnv)}
-          ${kvRow('Proper shipping name', s.proper_shipping_name, 'proper_shipping_name', sdsUnv)}
-        </dl></section>`;
-    }
+    // Classification from the poster
+    html += classificationCard(d, admin);
+
 
     // SDS card
     const total = d.sds_products_total != null ? d.sds_products_total : (d.sds_products || []).length;
@@ -166,6 +203,25 @@
         ${kvRow('Review due', { html: App.reviewBadge(c.review_status, s.review_due || c.review_due) })}
         ${kvRow('Version', s.version_no ? 'Version ' + s.version_no : '')}
         ${kvRow('File', s.has_file ? s.file_name : { html: '<span class="none">No PDF attached</span>' })}
+      </dl>
+      <h3 style="font-size:14px;margin:16px 0 6px">As printed on the SDS</h3>
+      <dl class="kv">
+        ${kvRow('Signal word', s.signal_word, 'signal_word', sdsUnv)}
+        ${kvRow('Hazard classification', s.hazard_classification, 'hazard_classification', sdsUnv)}
+        ${kvRow('Hazard statements', s.h_statements, 'h_statements', sdsUnv)}
+        ${kvRow('Precautionary statements', s.p_statements, 'p_statements', sdsUnv)}
+        ${kvRow('Poison schedule', s.poison_schedule, 'poison_schedule', sdsUnv)}
+        ${kvRow('CAS numbers', s.cas_numbers, 'cas_numbers', sdsUnv)}
+      </dl>
+      <h3 style="font-size:14px;margin:16px 0 2px">Transport details</h3>
+      <p class="hint" style="margin:0 0 6px">ADG class (for illustration only; quantities use the GHS classification).</p>
+      <dl class="kv">
+        ${kvRow('ADG class', s.dg_class, 'dg_class', sdsUnv)}
+        ${kvRow('Subsidiary class', s.subsidiary_class, 'subsidiary_class', sdsUnv)}
+        ${kvRow('UN number', s.un_number, 'un_number', sdsUnv)}
+        ${kvRow('Packing group', s.packing_group, 'packing_group', sdsUnv)}
+        ${kvRow('Hazchem code', s.hazchem_code, 'hazchem_code', sdsUnv)}
+        ${kvRow('Proper shipping name', s.proper_shipping_name, 'proper_shipping_name', sdsUnv)}
       </dl>`;
       if (total > 0) {
         html += `<details class="lazy" id="prodDetails"><summary>Also covers ${total} other product${total === 1 ? '' : 's'}</summary><ul class="mini-list" id="prodList">${(d.sds_products || []).map((p) => `<li><a href="#/chemical/${p.id}">${esc(p.product_name)}</a></li>`).join('')}</ul></details>`;
@@ -177,13 +233,13 @@
     // Assessment
     html += `<section class="card" id="assessCard"><div class="card-head"><h2>Hazard risk assessment</h2>${admin ? `<a class="btn no-print" href="#/chemical/${c.id}/edit?focus=assessment">${a ? 'Edit assessment' : 'Start assessment'}</a>` : ''}</div>`;
     if (c.decision === 'not_hazardous' && !a) {
-      html += `<div class="notice"><strong>Checked: not hazardous.</strong> No risk assessment is needed for this chemical.${c.decision_note ? ' ' + esc(c.decision_note) : ''}</div>`;
+      html += `<div class="notice"><strong>Not hazardous.</strong> No risk assessment is needed for this chemical.${c.decision_note ? ' ' + esc(c.decision_note) : ''}</div>`;
     } else if (a) {
-      if (c.decision === 'not_hazardous') html += '<div class="notice">This chemical has been checked and is not hazardous. An assessment is shown because one was already made.</div>';
+      if (c.decision === 'not_hazardous') html += '<div class="notice">This chemical is not hazardous. An assessment is shown because one was already made.</div>';
       html += aiNote(a) + hazardSummaryLine(d) + assessmentTable(d);
       html += `<details class="lazy no-print" id="assessHist"><summary>Older assessments</summary><div id="assessHistBody" class="muted">Loading...</div></details>`;
     } else {
-      html += `<div class="empty-state" style="padding:18px"><h2>${c.decision ? 'No assessment yet' : 'Not checked yet'}</h2><p>${c.decision ? 'There is no risk assessment for this chemical yet.' : 'Nobody has decided yet whether this chemical is hazardous. Read the SDS, then record the decision.'}</p>${admin ? `<a class="btn primary" href="#/chemical/${c.id}/edit?focus=${c.decision ? 'assessment' : 'details'}">${c.decision ? 'Start assessment' : 'Record the decision'}</a>` : ''}</div>`;
+      html += `<div class="empty-state" style="padding:18px"><h2>${c.decision ? 'No assessment yet' : 'Not classified yet'}</h2><p>${c.decision ? 'There is no risk assessment for this chemical yet.' : 'This chemical has not been classified yet. Read section 2 of the SDS and record the classification.'}</p>${admin ? `<a class="btn primary" href="#/chemical/${c.id}/edit?focus=${c.decision ? 'assessment' : 'classification'}">${c.decision ? 'Start assessment' : 'Classify it'}</a>` : ''}</div>`;
     }
     html += '</section>';
 
@@ -191,7 +247,7 @@
     const locs = d.locations || [];
     html += `<section class="card"><div class="card-head"><h2>Where it is stored</h2>${admin ? `<a class="btn no-print" href="#/chemical/${c.id}/edit?focus=locations">Edit locations</a>` : ''}</div>`;
     if (!locs.length) html += '<p class="muted" style="margin:0">No storage location recorded.</p>';
-    else html += `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Containers</th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Containers">${esc(l.container_note || '')}</td></tr>`).join('')}</tbody></table>`;
+    else html += `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Spill compound</th><th>Containers</th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Spill compound">${esc(l.spill_compound || '')}</td><td data-label="Containers">${esc(l.container_note || '')}</td></tr>`).join('')}</tbody></table>`;
     html += '</section>';
 
     root.innerHTML = html;
@@ -268,6 +324,7 @@
     root.innerHTML = `<a class="crumb" href="#/chemical/${id}">&larr; Back to the chemical</a>
       <div class="topbar"><div><h1 id="editTitle"></h1><p class="sub">Changes are saved one section at a time.</p></div></div>
       <section class="card" id="cardDetails"></section>
+      <section class="card" id="cardClass"></section>
       <section class="card" id="cardSds"></section>
       <section class="card" id="cardAssess"></section>
       <section class="card" id="cardLocs"></section>
@@ -279,21 +336,24 @@
       drawTitle();
       cards.forEach((n) => draw[n]());
     }
+    // The fields every chemical save sends along, so saving one section never blanks another.
+    function baseFields() {
+      const c = d.chemical;
+      return { product_name: c.product_name, supplier: c.supplier, synonyms: c.synonyms, product_codes: c.product_codes, use_description: c.use_description, physical_form: c.physical_form, decision_note: c.decision_note };
+    }
     function drawTitle() { $('#editTitle').textContent = 'Edit: ' + d.chemical.product_name; }
 
     const draw = {
       details() {
         const c = d.chemical;
-        $('#cardDetails').innerHTML = `<h2>Product details and decision</h2><form id="fDetails">
+        $('#cardDetails').innerHTML = `<h2>Product details</h2><form id="fDetails">
           ${inp('c_name', 'Product name', c.product_name, 'required')}
           ${inp('c_supplier', 'Supplier', c.supplier)}
           ${area('c_syn', 'Other names (one per line or separated by commas)', c.synonyms)}
           ${inp('c_codes', 'Product codes', c.product_codes)}
           ${area('c_use', 'What it is used for', c.use_description)}
-          <div class="row2">${select('c_form', 'Form', formOpts, c.physical_form)}
-          ${select('c_dec', 'Is it hazardous?', [['', 'Not checked yet'], ['hazardous', 'Hazardous'], ['not_hazardous', 'Not hazardous']], c.decision)}</div>
-          ${area('c_note', 'Reason for the decision (for example: Not classified as hazardous, SDS section 2)', c.decision_note)}
-          <p class="hint">${c.decision_by ? 'Last decided by ' + esc(c.decision_by) + (c.decision_at ? ' on ' + esc(App.fmtDate(c.decision_at)) : '') + '.' : 'No decision recorded yet.'}</p>
+          ${select('c_form', 'Form', formOpts, c.physical_form)}
+          ${area('c_note', 'Note about the classification or decision (optional)', c.decision_note)}
           <div class="actions" style="margin-top:12px"><button class="primary" type="submit">Save details</button></div></form>`;
         $('#fDetails').addEventListener('submit', async (e) => {
           e.preventDefault();
@@ -302,13 +362,114 @@
             await App.api('/chemicals/' + id, { method: 'PUT', body: {
               product_name: $('#c_name').value.trim(), supplier: $('#c_supplier').value.trim(), synonyms: $('#c_syn').value.trim(),
               product_codes: $('#c_codes').value.trim(), use_description: $('#c_use').value.trim(), physical_form: $('#c_form').value || null,
-              decision: $('#c_dec').value || null, decision_note: $('#c_note').value.trim(),
+              decision_note: $('#c_note').value.trim(),
             } });
             App.toast('Details saved.', 'ok');
             await reload('details');
           } catch (err) { App.toast(err.message, 'error'); }
           finally { btn.disabled = false; }
         });
+      },
+
+      classification() {
+        const c = d.chemical, G = App.GHS;
+        const orig = Array.isArray(c.classification) ? c.classification : null;
+        const st = {
+          mode: orig === null ? 'none' : (orig.length ? 'list' : 'empty'),
+          list: (orig || []).map((e) => Object.assign({}, e)),
+          decOv: c.decision_override || '',
+          pictMode: c.pictograms_override == null ? 'derived' : (pList(c.pictograms_override).length ? 'pick' : 'none'),
+          pict: new Set(pList(c.pictograms_override)),
+        };
+        const box = $('#cardClass');
+        const flags = list(c.classification_flags);
+        box.innerHTML = `<h2>Classification <span class="count">(from the Safe Work Australia poster)</span></h2>
+          <p class="hint" style="margin:0 0 6px">Read section 2 of the SDS and pick each hazard class and category it shows. The decision, signal word and pictograms are worked out from this list.</p>
+          ${flags.length ? `<div class="notice warn"><strong>Check these details.</strong><ul style="margin:4px 0 0;padding-left:18px">${flags.map((f) => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
+          <form id="fClass">
+          <fieldset><legend>Has it been classified?</legend>
+            <label class="inline"><input type="radio" name="cl_mode" value="none"> Not classified yet</label>
+            <label class="inline"><input type="radio" name="cl_mode" value="empty"> Classified: it carries none of the classifications (so it is non-hazardous)</label>
+            <label class="inline"><input type="radio" name="cl_mode" value="list"> Classified with the hazards below</label>
+          </fieldset>
+          <div id="clsEditor">
+            <ul class="cls-list" id="clsList"></ul>
+            <div class="row3" style="align-items:end">
+              <div><label for="cl_class">Hazard class</label><select id="cl_class">${G.HAZARD_CLASSES.map((h) => `<option value="${esc(h.id)}">${esc(h.label)}</option>`).join('')}</select></div>
+              <div><label for="cl_cat">Category</label><select id="cl_cat"></select></div>
+              <div><button type="button" id="cl_add">Add to the list</button></div>
+            </div>
+          </div>
+          <fieldset><legend>Decision override (optional)</legend>
+            <p class="hint" style="margin:0 0 4px">Only use this if the classification does not give the right answer. An override is shown to everyone.</p>
+            <div class="actions"><label class="inline"><select id="cl_dec" style="width:auto"><option value="">Use the derived decision</option><option value="hazardous">Hazardous</option><option value="not_hazardous">Not hazardous</option></select></label><button type="button" class="small" id="cl_decReset">Reset to derived</button></div>
+          </fieldset>
+          <fieldset><legend>Pictogram override (optional)</legend>
+            <label class="inline"><input type="radio" name="cl_pm" value="derived"> Use the derived pictograms</label>
+            <label class="inline"><input type="radio" name="cl_pm" value="pick"> Choose the pictograms myself</label>
+            <div class="pic-opts" id="cl_pics">${G.PICTOGRAMS.map((p) => `<label class="inline"><input type="checkbox" name="cl_pic" value="${p.code}"> ${App.pictogramImg(p.code, 40)} <span>${esc(p.code)} ${esc(p.name)}</span></label>`).join('')}</div>
+            <label class="inline"><input type="radio" name="cl_pm" value="none"> Show no pictograms</label>
+            <div class="actions" style="margin-top:6px"><button type="button" class="small" id="cl_pmReset">Reset to derived</button></div>
+          </fieldset>
+          <div class="preview" id="clsPreview" aria-live="polite"></div>
+          <div class="actions" style="margin-top:12px"><button class="primary" type="submit">Save classification</button></div></form>`;
+        const q = (s) => box.querySelector(s);
+        const fillCats = () => {
+          const h = G.HAZARD_CLASSES.find((x) => x.id === q('#cl_class').value);
+          q('#cl_cat').innerHTML = h.categories.map((k) => `<option value="${esc(k)}">${esc(G.categoryText(k))}</option>`).join('') + '<option value="">Category not known</option>';
+        };
+        function currentPictOverride() { return st.pictMode === 'derived' ? null : st.pictMode === 'none' || !st.pict.size ? [] : [...st.pict]; }
+        function refresh() {
+          box.querySelectorAll('input[name=cl_mode]').forEach((r) => { r.checked = r.value === st.mode; });
+          box.querySelectorAll('input[name=cl_pm]').forEach((r) => { r.checked = r.value === st.pictMode; });
+          box.querySelectorAll('input[name=cl_pic]').forEach((x) => { x.checked = st.pict.has(x.value); x.disabled = st.pictMode !== 'pick'; });
+          q('#cl_dec').value = st.decOv;
+          q('#clsEditor').style.display = st.mode === 'list' ? '' : 'none';
+          q('#clsList').innerHTML = st.list.length ? st.list.map((e, i) => `<li><span class="label">${esc(G.classificationLabel(e))}${e.k == null ? ' <span class="flag">Category not confirmed</span>' : ''}${e.check ? ' <span class="flag">Check this one</span>' : ''}</span><button type="button" class="small danger" data-rm="${i}" aria-label="Remove ${esc(G.classificationLabel(e))}">Remove</button></li>`).join('') : '<li class="muted">Nothing added yet.</li>';
+          const cl = st.mode === 'none' ? null : st.mode === 'empty' ? [] : st.list;
+          const ef = G.effective(cl, { decision: st.decOv || null, pictograms: currentPictOverride() });
+          q('#clsPreview').innerHTML = `<strong>What this gives</strong>
+            <dl class="kv" style="margin-top:6px"><dt>Decision</dt><dd>${App.decisionBadge(ef.decision)} ${provenance(ef.decision_overridden, App.decisionLabel(ef.derived.decision))}</dd>
+            <dt>Pictograms</dt><dd>${App.pictogramRow(ef.pictograms, 44) || '<span class="none">None</span>'} ${provenance(ef.pictograms_overridden, derivedPictText(ef.derived.pictograms))}</dd>
+            <dt>Signal word</dt><dd>${ef.signal_word ? esc(ef.signal_word) : '<span class="none">None</span>'}</dd></dl>
+            ${cl && cl.length ? classTableHtml(cl) : (cl ? '<p class="muted" style="margin:8px 0 0">It carries none of the classifications, so it is non-hazardous.</p>' : '<p class="muted" style="margin:8px 0 0">Not classified yet, so there is no decision.</p>')}`;
+        }
+        fillCats();
+        q('#cl_class').addEventListener('change', fillCats);
+        q('#cl_add').addEventListener('click', () => {
+          const e = { c: q('#cl_class').value, k: q('#cl_cat').value || null };
+          if (st.list.some((x) => x.c === e.c && x.k === e.k)) { App.toast('That one is already in the list.', 'error'); return; }
+          st.list.push(e); st.mode = 'list'; refresh();
+        });
+        box.addEventListener('click', (e) => {
+          const rm = e.target.closest('[data-rm]');
+          if (rm) { st.list.splice(Number(rm.dataset.rm), 1); refresh(); }
+        });
+        box.addEventListener('change', (e) => {
+          if (e.target.name === 'cl_mode') st.mode = e.target.value;
+          else if (e.target.name === 'cl_pm') st.pictMode = e.target.value;
+          else if (e.target.name === 'cl_pic') { e.target.checked ? st.pict.add(e.target.value) : st.pict.delete(e.target.value); }
+          else if (e.target.id === 'cl_dec') st.decOv = e.target.value;
+          refresh();
+        });
+        q('#cl_decReset').addEventListener('click', () => { st.decOv = ''; refresh(); });
+        q('#cl_pmReset').addEventListener('click', () => { st.pictMode = 'derived'; st.pict = new Set(); refresh(); });
+        q('#fClass').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          if (st.mode === 'list' && !st.list.length) { App.toast('Add at least one hazard class, or choose "carries none of the classifications".', 'error'); return; }
+          const po = currentPictOverride();
+          const btn = e.target.querySelector('button.primary'); btn.disabled = true;
+          try {
+            await App.api('/chemicals/' + id, { method: 'PUT', body: Object.assign(baseFields(), {
+              ghs_classification: st.mode === 'none' ? null : st.mode === 'empty' ? [] : st.list,
+              decision_override: st.decOv || null,
+              pictograms_override: po === null ? null : (po.length ? po : 'none'),
+            }) });
+            App.toast('Classification saved.', 'ok');
+            await reload('classification', 'details');
+          } catch (err) { App.toast(err.message, 'error'); btn.disabled = false; }
+        });
+        refresh();
       },
 
       sds() {
@@ -413,7 +574,7 @@
       locs() {
         const locs = d.locations || [];
         $('#cardLocs').innerHTML = `<div class="card-head"><h2>Storage locations</h2><button type="button" class="primary" id="locAdd">Add a location</button></div>
-          ${locs.length ? `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Containers</th><th></th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Containers">${esc(l.container_note || '')}</td><td><button type="button" class="small" data-loc="${l.id}">Edit</button> <button type="button" class="small danger" data-locdel="${l.id}">Delete</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No storage location recorded yet.</p>'}`;
+          ${locs.length ? `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Spill compound</th><th>Containers</th><th></th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Spill compound">${esc(l.spill_compound || '')}</td><td data-label="Containers">${esc(l.container_note || '')}</td><td><button type="button" class="small" data-loc="${l.id}">Edit</button> <button type="button" class="small danger" data-locdel="${l.id}">Delete</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No storage location recorded yet.</p>'}`;
         $('#locAdd').addEventListener('click', () => locModal(null));
         $('#cardLocs').onclick = async (e) => {
           const ed = e.target.closest('[data-loc]');
@@ -442,13 +603,15 @@
       const body = document.createElement('div');
       body.innerHTML = `${inp('l_loc', 'Where is it kept?', l && l.location, 'required placeholder="For example: Workshop, flammables cabinet 1"')}
         <div class="row2">${inp('l_qty', 'How much', l ? l.quantity : '', 'type="number" min="0" step="any" inputmode="decimal"')}${select('l_unit', 'Unit', [['L', 'Litres (L)'], ['kg', 'Kilograms (kg)']], l ? l.unit : 'L')}</div>
-        ${inp('l_note', 'Containers (optional)', l && l.container_note, 'placeholder="For example: 4 x 5 L drums"')}`;
+        ${inp('l_note', 'Containers (optional)', l && l.container_note, 'placeholder="For example: 4 x 5 L drums"')}
+        ${inp('l_spill', 'Spill compound (optional)', l && l.spill_compound, 'placeholder="Leave blank to use the location"')}
+        <p class="hint">Locations that share the same spill compound text count as one spill area for the flammable liquid category 4 rule.</p>`;
       App.modal({ title: l ? 'Edit storage location' : 'Add a storage location', body, buttons: [
         { label: 'Cancel' },
         { label: 'Save', kind: 'primary', onClick: async () => {
           const loc = body.querySelector('#l_loc').value.trim();
           if (!loc) { App.toast('Say where it is kept.', 'error'); return false; }
-          const payload = { location: loc, quantity: Number(body.querySelector('#l_qty').value) || 0, unit: body.querySelector('#l_unit').value, container_note: body.querySelector('#l_note').value.trim() };
+          const payload = { location: loc, quantity: Number(body.querySelector('#l_qty').value) || 0, unit: body.querySelector('#l_unit').value, container_note: body.querySelector('#l_note').value.trim(), spill_compound: body.querySelector('#l_spill').value.trim() };
           if (l) await App.api('/locations/' + l.id, { method: 'PUT', body: payload });
           else await App.api(`/chemicals/${id}/locations`, { method: 'POST', body: payload });
           await reload('locs');
@@ -460,7 +623,6 @@
     function sdsModal(mode) {
       const s = d.sds || {};
       const body = document.createElement('div');
-      const picks = new Set(String(s.pictograms || '').split(',').map((x) => x.trim()).filter(Boolean));
       const maxMb = (App.settings && App.settings.upload_max_mb) || 15;
       body.innerHTML = `
         ${mode !== 'edit' ? `<label for="s_file">${mode === 'replace' ? 'The newer PDF (required)' : 'PDF file (optional)'}</label><input type="file" id="s_file" accept="application/pdf,.pdf"><p class="hint">PDF only, up to ${maxMb} MB.${mode === 'replace' ? ' The old version is kept in the history. The risk assessment is not changed, so check it against the new SDS.' : ''}</p>` : ''}
@@ -469,12 +631,11 @@
         <div class="row2">${inp('s_issue', 'Issue date', s.issue_date, 'type="date"')}${inp('s_rev', 'Revision', s.revision)}</div>
         ${mode === 'edit' ? `${inp('s_due', 'Review due', s.review_due, 'type="date"')}<p class="hint">Leave this alone and it is worked out as the issue date plus 5 years.</p>` : ''}
         ${inp('s_phone', 'Emergency phone', s.emergency_phone)}
-        <div class="row2">${select('s_signal', 'Signal word', [['', 'None'], ['Danger', 'Danger'], ['Warning', 'Warning']], s.signal_word)}${select('s_haz', 'SDS says it is', [['', 'Not recorded'], ['1', 'Hazardous'], ['0', 'Not hazardous']], s.hazardous == null ? '' : s.hazardous)}</div>
+        <div class="row2">${select('s_signal', 'Signal word', [['', 'None'], ['Danger', 'Danger'], ['Warning', 'Warning']], s.signal_word)}</div>
         ${area('s_class', 'Hazard classification', s.hazard_classification)}
         ${area('s_h', 'Hazard statements (H codes)', s.h_statements)}
         ${area('s_p', 'Precautionary statements (P codes)', s.p_statements)}
-        <fieldset><legend>Hazard pictograms</legend><div class="checks">${App.PICTOGRAM_CODES.map((k) => `<label class="inline"><input type="checkbox" name="s_pic" value="${k}"${picks.has(k) ? ' checked' : ''}> ${App.pictogramSvg(k, 26)} ${esc(App.pictogramLabel(k))}</label>`).join('')}</div></fieldset>
-        <div class="row3">${inp('s_poison', 'Poison schedule', s.poison_schedule)}${inp('s_un', 'UN number', s.un_number)}${inp('s_dg', 'DG class', s.dg_class)}</div>
+        <div class="row3">${inp('s_poison', 'Poison schedule', s.poison_schedule)}${inp('s_un', 'UN number', s.un_number)}${inp('s_dg', 'ADG class', s.dg_class)}</div>
         <div class="row3">${inp('s_sub', 'Subsidiary class', s.subsidiary_class)}${select('s_pg', 'Packing group', [['', 'None'], ['I', 'I'], ['II', 'II'], ['III', 'III']], s.packing_group)}${inp('s_hazchem', 'Hazchem code', s.hazchem_code)}</div>
         ${inp('s_psn', 'Proper shipping name', s.proper_shipping_name)}
         ${inp('s_cas', 'CAS numbers (separated by commas)', s.cas_numbers)}`;
@@ -492,9 +653,7 @@
           const data = {
             title: q('#s_title').value.trim(), supplier: q('#s_sup').value.trim(), issue_date: q('#s_issue').value || null, revision: q('#s_rev').value.trim(),
             emergency_phone: q('#s_phone').value.trim(), signal_word: q('#s_signal').value || null,
-            hazardous: q('#s_haz').value === '' ? null : Number(q('#s_haz').value),
             hazard_classification: q('#s_class').value.trim(), h_statements: q('#s_h').value.trim(), p_statements: q('#s_p').value.trim(),
-            pictograms: [...body.querySelectorAll('input[name=s_pic]:checked')].map((x) => x.value).join(','),
             poison_schedule: q('#s_poison').value.trim(), un_number: q('#s_un').value.replace(/\D/g, ''), dg_class: q('#s_dg').value.trim(),
             subsidiary_class: q('#s_sub').value.trim(), packing_group: q('#s_pg').value || null, hazchem_code: q('#s_hazchem').value.trim(),
             proper_shipping_name: q('#s_psn').value.trim(), cas_numbers: q('#s_cas').value.trim(),
@@ -523,10 +682,10 @@
     }
 
     drawTitle();
-    draw.details(); draw.sds(); draw.locs(); draw.danger();
+    draw.details(); draw.classification(); draw.sds(); draw.locs(); draw.danger();
     await draw.assess();
     const focus = params.query && params.query.focus;
-    const target = { details: '#cardDetails', sds: '#cardSds', assessment: '#cardAssess', locations: '#cardLocs' }[focus];
+    const target = { details: '#cardDetails', classification: '#cardClass', sds: '#cardSds', assessment: '#cardAssess', locations: '#cardLocs' }[focus];
     if (target) { const el = $(target); if (el) el.scrollIntoView({ block: 'start' }); }
   }
 

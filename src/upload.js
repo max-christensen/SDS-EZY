@@ -5,6 +5,9 @@
 import { json, loadSettings, todayIso } from "./lib.js";
 import { getAiConfig, runExtraction, matchControlOptions, AI_DRAFT_LABEL } from "./ai.js";
 import { refreshChemicalSummary } from "./register.js";
+import { derive } from "../public/lib/ghs-ref.mjs";
+
+function parseJsonList(v) { try { const x = JSON.parse(v); return Array.isArray(x) ? x : []; } catch { return []; } }
 
 const MAX_TEXT_CHARS = 150000;
 const DEFAULT_MAX_MB = 15, HARD_MAX_MB = 25, DEFAULT_RATE = 10;
@@ -266,7 +269,7 @@ async function processUpload(env, user, ctx) {
   const target = await findTarget(env, replaceId, products.map(p => p.product_name), supplier);
   let oldChems = [];
   if (target) {
-    const { results } = await db.prepare("SELECT id, product_name FROM chemicals WHERE sds_id = ? LIMIT 500").bind(target.id).all();
+    const { results } = await db.prepare("SELECT id, product_name, ghs_classification, decision_override, pictograms_override FROM chemicals WHERE sds_id = ? LIMIT 500").bind(target.id).all();
     oldChems = results || [];
   }
   const matched = new Map(); // product index -> existing chemical id
@@ -283,7 +286,18 @@ async function processUpload(env, user, ctx) {
   const docKey = target ? target.doc_key : crypto.randomUUID();
   const aiDraft = !!data;
   const sdsTitle = sdsF.title || products.map(p => p.product_name).join(", ").slice(0, 300);
-  const hazardous = data && data.decision ? (data.decision === "hazardous" ? 1 : 0) : null;
+  // The verified classification (null = none usable: the chemical stays unclassified and has no decision).
+  const cls = data && data.classification ? data.classification : null;
+  const der = cls ? derive(cls.list) : null;
+  const eff = {
+    classification: cls ? JSON.stringify(cls.list) : null,
+    flags: cls && cls.flags.length ? JSON.stringify(cls.flags) : null,
+    decision: der ? der.decision : null,
+    signal_word: der ? der.signal_word : null,
+    pictograms: der && der.pictograms.length ? der.pictograms.join(",") : null,
+  };
+  if (cls) warnings.push(...cls.flags);
+  else if (data) warnings.push("No GHS classification could be read from the SDS, so the product has no hazardous decision yet.");
   const decisionAt = new Date().toISOString();
   const ref = { sql: "(SELECT id FROM sds WHERE r2_key = ?)", params: [r2Key] };
   const stm = [];
@@ -292,16 +306,29 @@ async function processUpload(env, user, ctx) {
   if (target) P("UPDATE sds SET is_current = 0, replaced_at = ? WHERE doc_key = ? AND is_current = 1", decisionAt, docKey);
   P(`INSERT INTO sds (doc_key, version_no, is_current, title, supplier, r2_key, file_name, file_size, file_hash, issue_date, revision, emergency_phone,
        review_due, signal_word, hazard_classification, h_statements, p_statements, poison_schedule, un_number, dg_class, subsidiary_class, packing_group,
-       hazchem_code, proper_shipping_name, pictograms, cas_numbers, unverified, source, ai_provider, hazardous, uploaded_by)
-     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'upload', ?, ?, ?)`,
+       hazchem_code, proper_shipping_name, cas_numbers, unverified, source, ai_provider, uploaded_by)
+     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'upload', ?, ?)`,
     docKey, maxVersion + 1, sdsTitle || null, supplier, r2Key, fileName, buf.byteLength, hash,
     sdsF.issue_date || null, sdsF.revision || null, sdsF.emergency_phone || null, sdsF.review_due || null, sdsF.signal_word || null,
     sdsF.hazard_classification || null, sdsF.h_statements || null, sdsF.p_statements || null, sdsF.poison_schedule || null,
     sdsF.un_number || null, sdsF.dg_class || null, sdsF.subsidiary_class || null, sdsF.packing_group || null, sdsF.hazchem_code || null,
-    sdsF.proper_shipping_name || null, (sdsF.pictograms || []).join(",") || null, (sdsF.cas_numbers || []).join(", ") || null,
-    JSON.stringify(unverified), aiDraft ? cfg.provider : null, hazardous, user.id);
+    sdsF.proper_shipping_name || null, (sdsF.cas_numbers || []).join(", ") || null,
+    JSON.stringify(unverified), aiDraft ? cfg.provider : null, user.id);
 
   if (target) P(`UPDATE chemicals SET sds_id = ${ref.sql}, updated_at = datetime('now') WHERE sds_id = ?`, ...ref.params, target.id);
+
+  // A new version replaces the classification of the chemicals that used the old sheet, unless an admin has edited a classification or
+  // overridden the decision / pictograms on any of them. Then the existing values stay and a warning says so.
+  if (target && eff.classification !== null) {
+    const adminTouched = oldChems.some(c => c.decision_override || c.pictograms_override || parseJsonList(c.ghs_classification).some(e => e && e.src === "admin"));
+    if (adminTouched) {
+      warnings.push("The classification was not changed because an admin has edited it or overridden the decision or pictograms. Compare it with the new sheet.");
+    } else {
+      P(`UPDATE chemicals SET ghs_classification = ?, classification_flags = ?, decision = ?, decision_by = ?, decision_at = ?, signal_word = ?, pictograms = ?,
+           updated_at = datetime('now') WHERE sds_id = ${ref.sql}`,
+        eff.classification, eff.flags, eff.decision, eff.decision ? AI_DRAFT_LABEL : null, eff.decision ? decisionAt : null, eff.signal_word, eff.pictograms, ...ref.params);
+    }
+  }
 
   const chemRef = (i) => matched.has(i)
     ? { sql: "?", params: [matched.get(i)] }
@@ -311,23 +338,17 @@ async function processUpload(env, user, ctx) {
   const casText = (sdsF.cas_numbers || []).join(" ");
   const newIdx = [];
   products.forEach((p, i) => {
-    if (matched.has(i)) {
-      if (data && data.decision) {
-        P("UPDATE chemicals SET decision = ?, decision_note = ?, decision_by = ?, decision_at = ? WHERE id = ? AND decision IS NULL",
-          data.decision, data.decision_note || null, AI_DRAFT_LABEL, decisionAt, matched.get(i));
-      }
-      return;
-    }
+    if (matched.has(i)) return;
     if (target && !data) return; // replacing without a draft: existing chemicals are simply re-pointed
     newIdx.push(i);
     const search = [p.product_name, supplier, p.synonyms, p.product_codes, casText].filter(Boolean).join(" ").toLowerCase();
-    P(`INSERT INTO chemicals (product_name, supplier, synonyms, product_codes, use_description, physical_form, decision, decision_note, decision_by, decision_at,
-         sds_id, sds_issue_date, review_due, risk_level, dg_class, signal_word, pictograms, source, search_text, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${ref.sql}, ?, ?, ?, ?, ?, ?, 'upload', ?, ?)`,
+    // Effective decision / signal word / pictograms are DERIVED from the verified classification (never from what the AI said).
+    P(`INSERT INTO chemicals (product_name, supplier, synonyms, product_codes, use_description, physical_form, ghs_classification, classification_flags,
+         decision, decision_by, decision_at, sds_id, sds_issue_date, review_due, risk_level, dg_class, signal_word, pictograms, source, search_text, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${ref.sql}, ?, ?, ?, ?, ?, ?, 'upload', ?, ?)`,
       p.product_name, supplier, p.synonyms, p.product_codes, p.use_description, p.physical_form || (data && data.assessment.form) || null,
-      data ? data.decision : null, data ? data.decision_note : null, data && data.decision ? AI_DRAFT_LABEL : null, data && data.decision ? decisionAt : null,
-      ...ref.params, sdsF.issue_date || null, sdsF.review_due || null, risk, sdsF.dg_class || null, sdsF.signal_word || null,
-      (sdsF.pictograms || []).join(",") || null, search, user.id);
+      eff.classification, eff.flags, eff.decision, eff.decision ? AI_DRAFT_LABEL : null, eff.decision ? decisionAt : null,
+      ...ref.params, sdsF.issue_date || null, sdsF.review_due || null, risk, sdsF.dg_class || null, eff.signal_word, eff.pictograms, search, user.id);
   });
 
   // Assessments: AI draft for every product; or one blank one for the new chemical when there is no draft.

@@ -44,6 +44,7 @@ const solventAi = (over = {}) => ({
     un_number: "1993", dg_class: "3", packing_group: "II", hazchem_code: "3YE", proper_shipping_name: "FLAMMABLE LIQUID, N.O.S.", pictograms: ["flame", "exclamation"],
     cas_numbers: ["64-17-5", "67-63-0"], h_statements: "H225 Highly flammable liquid and vapour", p_statements: "P210 Keep away from heat" },
   products: [{ product_name: "KARRA CLEAN Solvent Wash 5L", physical_form: "liquid", product_codes: "KC-5" }],
+  classification: [{ class: "flam_liq", category: "2" }, { class: "eye_dmg", category: "2A" }, { class: "stot_se", category: 3 }],
   decision: "hazardous", decision_note: "Section 2: flammable liquid category 2.",
   assessment: { form: "liquid", use_description: "cleaning", route_inhalation: true, isolation: ["Lids kept on containers when not in use", "Bunded drip tray"], ventilation: ["local exhaust ventilation"],
     ppe: ["Safety glasses"], additional_ppe: ["Half-face respirator with suitable filter"], risk_level: "significant_controlled", monitoring_needed: false, surveillance_needed: null }, ...over,
@@ -52,6 +53,7 @@ const plasterAi = () => ({
   sds: { title: "FinishCoat Plaster range", supplier: "Karrawong Building Products", issue_date: "2021-08-09", emergency_phone: "+61 2 5550 0199", signal_word: "Danger",
     un_number: null, pictograms: ["corrosive"], cas_numbers: ["26499-65-0", "1305-62-0"], h_statements: "H315 Causes skin irritation; H318 Causes serious eye damage" },
   products: ["Light", "Standard", "Quick", "Base"].map((n, i) => ({ product_name: `FinishCoat Plaster ${n}`, product_codes: `KP-10${i + 1}`, physical_form: "powder" })),
+  classification: [{ class: "skin_corr", category: "2" }, { class: "eye_dmg", category: "1" }],
   decision: "hazardous", decision_note: "Eye damage category 1.",
   assessment: { form: "powder", route_inhalation: true, ppe: ["safety glasses"], additional_ppe: ["P2 dust mask"], risk_level: "significant_controlled" },
 });
@@ -138,8 +140,7 @@ test("AI success: SDS, chemical, drafted assessment, decision, control links, ve
   assert.equal(sds.poison_schedule, null);
   assert.equal(sds.issue_date, "2023-03-14");
   assert.equal(sds.review_due, "2028-03-14");
-  assert.equal(sds.hazardous, 1);
-  assert.equal(sds.pictograms, "flame,exclamation");
+  assert.equal("pictograms" in sds || "hazardous" in sds, false, "columns are gone");
   assert.equal(sds.cas_numbers, "64-17-5, 67-63-0");
   assert.deepEqual(JSON.parse(sds.unverified).sort(), ["hazchem_code", "poison_schedule"]);
   const chem = q1(env, "SELECT * FROM chemicals WHERE id = ?", body.chemical_ids[0]);
@@ -201,7 +202,7 @@ test("not hazardous sheet records decision not_hazardous", async () => {
   const f = withAi(env, () => ({
     sds: { title: "Wallbright Interior Matt White", supplier: "Wallbright Paints Pty Ltd", issue_date: "2022-03", emergency_phone: "1800 555 0177", un_number: "1263", signal_word: "Warning" },
     products: [{ product_name: "Wallbright Interior Matt White 10L", physical_form: "liquid" }],
-    decision: "not_hazardous", decision_note: "Section 2: not classified as hazardous.", assessment: { risk_level: "not_significant" },
+    classification: [], decision: "hazardous", pictograms: ["GHS06"], assessment: { risk_level: "not_significant" },
   }));
   let body;
   try { body = await (await handleUpload(uploadReq({ text: paint, answers: { use_where_how: "painting walls", exposure: "over_4_hours", ventilation: "good" } }), env, user)).json(); } finally { f.restore(); }
@@ -209,7 +210,6 @@ test("not hazardous sheet records decision not_hazardous", async () => {
   const chem = q1(env, "SELECT * FROM chemicals WHERE id = ?", body.chemical_ids[0]);
   assert.equal(chem.decision, "not_hazardous");
   const sds = q1(env, "SELECT * FROM sds");
-  assert.equal(sds.hazardous, 0);
   assert.equal(sds.issue_date, "2022-03-01", "month-only issue date uses the 1st");
   assert.equal(sds.review_due, "2027-03-01");
   assert.equal(sds.un_number, null);

@@ -19,15 +19,38 @@ emailed code. In the demo Worker (`DEMO_MODE=1`) every write is blocked for both
 
 ## What is in it (for `--today 2026-10-19`; the counts stay the same for any date)
 
-* **65 chemicals**: 48 hazardous, 16 not hazardous, 1 with no decision yet (a two-stroke fuel mix).
-* **50 SDS rows / PDFs**: 49 current + 1 old version. One chemical (an unlabelled concrete sealer tin) has **no SDS**.
+* **66 chemicals**: 50 hazardous, 15 not hazardous, 1 with no decision yet (the two-stroke fuel mix, which is **not classified**: `ghs_classification` is NULL).
+* **GHS classification** (Safe Work Australia poster table, `public/lib/ghs-ref.mjs`) on every chemical, stored as JSON in `ghs_classification`; `decision`, `signal_word` and `pictograms`
+  are the effective values from `effective()`. Non-hazardous products are `[]`. Examples: lacquer thinners = Flam. Liq. 2, Asp. Tox. 1, Skin Irrit. 2, Eye Irrit. 2A, STOT SE 3, Repr. 2, STOT RE 2;
+  battery acid = Skin Corr. 1A + Met. Corr. 1; cement = Skin Irrit. 2, Eye Dam. 1, Skin Sens. 1, STOT SE 3; spray paints = Aerosol 1.
+* **Visible overrides and flags** (one each): Marlow Mineral Turpentine has a pictogram override adding GHS09 (environment; the table never derives it); Ironwood Hydraulic Oil 46 has a decision override
+  (classification `[]`, derives not hazardous, overridden to hazardous because it is used hot); Tidewater Drain Unblocker Gel has a `check:true` entry
+  (Skin Corr. 1B is the AI's reading, its sheet prints "Skin Corr. 1" with no letter) plus a `classification_flags` message and `sds.unverified = ["classification"]`.
+  The concrete sealer tin has no SDS and an admin-entered classification (`src: "admin"`).
+* **51 SDS rows / PDFs**: 50 current + 1 old version. Section 2 of each sheet states the classification in the usual abbreviations with H-codes ("Flam. Liq. 2 (H225)"), the signal word, and pictogram names and codes as text (no images).
+  Their sheets are checked by `verifyClassification` in the tests: nothing removed and no flags, apart from the one deliberately flagged sheet.
 * **Shared SDS**: Brightboard plaster sheet shared by 10 products, Stickfast Grip Max adhesive sheet by 4 pack sizes
   (cartridges and a pail), Kestrel acrylic paints by 3, Kestrel oil stain by 2.
 * **SDS version history**: Marlow Methylated Spirits, v1 (replaced) and v2 (current); the chemical page shows the history and an older assessment.
-* **Review status**: 5 past the five-year review date (overdue), 4 due within 90 days, 54 in date, 1 SDS with no issue date (unknown), 1 chemical with no SDS.
-* **Risk levels** (current assessment): 25 not significant, 32 significant but controlled, 4 significant and not controlled, 4 uncertain (1 chemical has a blank assessment, 1 has no SDS).
-* **Storage**: 73 locations in L and kg. The hazardous manifest totals across class 2.1, 2.2 (sub 5.1), 3, 5.1 (sub 8), 8, 9 and "Unclassified" (cement and plaster, hazardous but not dangerous goods).
-* Each PDF is 11 to 12 KB, has 16 numbered sections, and uses standard fonts with real text, so it can be read by the AI reading step too.
+* **Review status**: 5 past the five-year review date (overdue), 4 due within 90 days, 55 in date, 1 SDS with no issue date (unknown), 1 chemical with no SDS.
+* **Risk levels** (current assessment): 25 not significant, 33 significant but controlled, 4 significant and not controlled, 4 uncertain (1 chemical has a blank assessment, 1 has no SDS).
+* **Storage**: 75 locations in L and kg, nine of them with a named spill compound. Totals are by GHS class and category (Schedule 11 items), not by ADG class.
+* Each PDF is 11 to 13 KB, has 16 numbered sections, and uses standard fonts with real text, so it can be read by the AI reading step too.
+
+### Expected site totals (asserted in `tests/demo-data.test.mjs` with `computeSiteTotals`)
+
+| Item | Total | Placard | Manifest | Status |
+|---|---|---|---|---|
+| 1 Flammable gases | 250 L | 200 | 5000 | **OVER placard** (2 x 45 kg LPG heater cylinders 210 L + acetylene 40 L) |
+| 9 Flammable liquids, any mix of items 6 to 8 | 1074.6 L | 1000 | 10000 | **OVER placard through the mix only**: item 6 = 45 L (limit 50), item 7 = 64 L (limit 250), item 8 = 965.6 L (limit 1000), none over on its own (a 1000 L diesel fuel cube holds 800 L) |
+| 8 Flammable liquids cat 3 | 965.6 L | 1000 | 10000 | under; includes the 20 L of category 4 decking oil that shares the "Paint store bund" spill compound with the stains and varnish (counted as category 3) |
+| 10 Flammable liquids cat 4 | 10 L | 10000 | 100000 | the second decking-oil tin, kept in its own location |
+| 4 Gases under pressure (other) | 100 L | 1000 | 10000 | under |
+| 38 Skin corrosion 1B | 40.7 | 250 | 2500 | under; other items (5, 25, 28, 37, 40, 41) are all well under |
+
+* **No item is over its manifest quantity.** Those quantities start at 2500 L or more for anything the site holds, which a small joinery cannot realistically reach without breaking the rest of the story.
+* **Unit mismatch**: the 9 kg LPG cylinder in the van is recorded in kg; item 1 is in litres, so it is not counted and appears as an issue.
+* **Other issues expected**: 5 x "acute toxicity category 4 has no item for liquids and solids", 1 x "no classification" (the two-stroke mix, 5 L), and 6 products that count towards more than one item.
 
 Issue dates are computed from the build date (`--today`), so the overdue/due-soon counts do not drift as time passes.
 

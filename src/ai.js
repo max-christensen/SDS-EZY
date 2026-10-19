@@ -10,6 +10,7 @@
 //   handleGetAiSettings / handlePutAiSettings / handleTestAi   admin endpoints
 
 import { json, loadSettings, saveSetting, encryptSecret, decryptSecret, addYearsIso } from "./lib.js";
+import { promptClassList, verifyClassification } from "../public/lib/ghs-ref.mjs";
 
 // ---------------------------------------------------------------------------------------------
 // Providers and defaults
@@ -30,7 +31,6 @@ const MAX_OUT_TOKENS = { workers_ai: 4096, claude: 8192, openai: 8192, gemini: 8
 // Characters of SDS text sent to the model. Workers AI models have a smaller context window.
 const AI_TEXT_BUDGET = { workers_ai: 40000, claude: 120000, openai: 100000, gemini: 120000 };
 
-export const PICTOGRAMS = ["toxic", "health", "flame", "exclamation", "oxidising", "gas", "environment", "corrosive"];
 export const PHYSICAL_FORMS = ["liquid", "solid", "powder", "gas", "aerosol", "paste", "other"];
 export const RISK_LEVELS = ["not_significant", "significant_controlled", "significant_not_controlled", "uncertain"];
 export const AI_DRAFT_LABEL = "Prepared from the SDS (AI draft)";
@@ -285,10 +285,10 @@ export const SCHEMA_EXAMPLE = {
     hazard_classification: "string", h_statements: "H225 Highly flammable liquid and vapour; H319 ...",
     p_statements: "P210 Keep away from heat; ...", poison_schedule: "e.g. S5", un_number: "4 digits", dg_class: "e.g. 3 or 2.1",
     subsidiary_class: "string or null", packing_group: "I | II | III", hazchem_code: "e.g. 3YE", proper_shipping_name: "string",
-    pictograms: ["toxic|health|flame|exclamation|oxidising|gas|environment|corrosive"], cas_numbers: ["64-17-5"],
+    cas_numbers: ["64-17-5"],
   },
+  classification: [{ class: "flam_liq", category: "2" }],
   products: [{ product_name: "string", product_codes: "string", synonyms: "string", physical_form: "liquid|solid|powder|gas|aerosol|paste|other", use_description: "string" }],
-  decision: "hazardous | not_hazardous | null", decision_note: "string",
   assessment: {
     form: "liquid|solid|powder|gas|aerosol|paste|other", use_description: "string",
     route_inhalation: true, route_ingestion: false, route_absorption: false,
@@ -310,8 +310,9 @@ export function buildPrompt({ text, answers, optionLabels }) {
     "- Never guess exact values. For un_number, packing_group, hazchem_code, dg_class, subsidiary_class, cas_numbers, issue_date, poison_schedule, emergency_phone: copy the value exactly as printed in the SDS text, or use null / [] when it is not printed. The Worker checks each of these against the document text and blanks anything it cannot find.",
     "- issue_date must be the date this SDS was issued or revised, written YYYY-MM-DD. If only a month and year are printed, write YYYY-MM.",
     "- One SDS can cover many products (different codes, pack sizes, colours). List every product in products (at least one). If the sheet covers one product, list one.",
-    "- decision: \"hazardous\" if the SDS classifies the product as hazardous (GHS hazard classes/statements) or as dangerous goods; \"not_hazardous\" only if the SDS clearly states it is not classified as hazardous; otherwise null. Explain briefly in decision_note, citing the SDS section.",
-    "- pictograms: only these codes: toxic (skull), health (health hazard), flame, exclamation, oxidising, gas (gas cylinder), environment, corrosive. Use [] if none or unknown.",
+    "- classification: read SDS section 2 (Hazard identification, classification of the substance or mixture) ONLY. List every GHS hazard class and category you can SEE printed there (for example \"Flam. Liq. 2\" is {\"class\": \"flam_liq\", \"category\": \"2\"}; \"Acute Tox. 4 (Oral)\" is {\"class\": \"acute_tox\", \"category\": \"4\"}). Use exactly the class ids and categories in the list below, category as text. Give only what section 2 shows: never infer a class from the product type, from other sections or from your own knowledge, and never invent one. If section 2 says the product is not classified as hazardous, return []. If you cannot find section 2, return null. Do NOT give pictograms, a signal word conclusion or a hazardous / not hazardous decision: the Worker derives those from the classification.",
+    "  Allowed classes and categories:",
+    promptClassList().split("\n").map(l => "  " + l).join("\n"),
     "- The assessment lists (isolation, ventilation, other_controls, ppe, additional_ppe) are short free-text suggestions drawn from the SDS (sections 7 and 8). Prefer these wordings where they fit: " + (optionLabels && optionLabels.length ? optionLabels.join(" | ") : "none supplied") + ". Do not invent product-specific claims.",
     "- route_inhalation / route_ingestion / route_absorption: true when the SDS and the user's answers make that route of exposure credible, else false.",
     "- risk_level: the SDS cannot tell how the product is used. Decide from the SDS hazards AND the user's answers below. If the SDS text and the answers do not give enough to decide, use \"uncertain\". Use \"uncertain\" whenever you are unsure. Do not choose a level just to fill the field.",
@@ -454,16 +455,6 @@ function cleanBool(v) {
   if (typeof v === "string") { const t = v.trim().toLowerCase(); if (["true", "yes", "y", "1"].includes(t)) return true; if (["false", "no", "n", "0"].includes(t)) return false; }
   return null;
 }
-const PICTO_ALIASES = {
-  skull: "toxic", toxic: "toxic", poison: "toxic", acute_toxicity: "toxic", ghs06: "toxic",
-  health: "health", health_hazard: "health", ghs08: "health",
-  flame: "flame", flammable: "flame", fire: "flame", ghs02: "flame",
-  exclamation: "exclamation", exclamation_mark: "exclamation", irritant: "exclamation", ghs07: "exclamation",
-  oxidising: "oxidising", oxidizing: "oxidising", oxidiser: "oxidising", oxidizer: "oxidising", flame_over_circle: "oxidising", ghs03: "oxidising",
-  gas: "gas", gas_cylinder: "gas", ghs04: "gas",
-  environment: "environment", environmental: "environment", ghs09: "environment",
-  corrosive: "corrosive", corrosion: "corrosive", ghs05: "corrosive",
-};
 
 // Returns {ok:true, data, warnings} or {ok:false, errors:[...]}. Strict about structure and types; harmless coercion for scalars.
 export function validateExtraction(input) {
@@ -488,14 +479,11 @@ export function validateExtraction(input) {
       un_number: cleanStr(s.un_number, 40, "sds.un_number"), dg_class: cleanStr(s.dg_class, 40, "sds.dg_class"),
       subsidiary_class: cleanStr(s.subsidiary_class, 60, "sds.subsidiary_class"), packing_group: cleanStr(s.packing_group, 40, "sds.packing_group"),
       hazchem_code: cleanStr(s.hazchem_code, 40, "sds.hazchem_code"), proper_shipping_name: cleanStr(s.proper_shipping_name, 300, "sds.proper_shipping_name"),
-      pictograms: [], cas_numbers: cleanList(s.cas_numbers, 60, 40, "sds.cas_numbers"),
+      cas_numbers: cleanList(s.cas_numbers, 60, 40, "sds.cas_numbers"),
     };
     const sw = cleanStr(s.signal_word, 40, "sds.signal_word");
     if (sw) { const t = sw.toLowerCase(); sds.signal_word = t === "danger" ? "Danger" : t === "warning" ? "Warning" : null; }
-    for (const p of cleanList(s.pictograms, 20, 40, "sds.pictograms")) {
-      const code = PICTO_ALIASES[p.toLowerCase().replace(/[\s-]+/g, "_")];
-      if (code) { if (!sds.pictograms.includes(code)) sds.pictograms.push(code); } else warnings.push(`Ignored unknown pictogram "${p.slice(0, 30)}".`);
-    }
+    // Pictograms, a signal-word conclusion and the decision are NOT read from the AI: they are derived from the classification.
 
     const seen = new Set();
     const products = [];
@@ -517,9 +505,11 @@ export function validateExtraction(input) {
     }
     if (!products.length) return { ok: false, errors: ["The AI answer has no product names."] };
 
-    let decision = cleanStr(input.decision, 40, "decision");
-    if (decision) { const d = decision.toLowerCase().replace(/[\s-]+/g, "_"); decision = d === "hazardous" || d === "not_hazardous" ? d : null; }
-    const decision_note = cleanStr(input.decision_note, 800, "decision_note");
+    // classification: null = the AI gave none we can use (leave the chemical unclassified); an array (possibly empty) is checked
+    // against the SDS H-codes in verifyExtraction. Entries are cleaned by normaliseClassification there (category may be a number).
+    let classification = null;
+    if (Array.isArray(input.classification)) classification = input.classification.slice(0, 40).filter(isObj);
+    else if (input.classification !== undefined && input.classification !== null) warnings.push("The AI's classification was not a list, so it was ignored.");
 
     const a = isObj(input.assessment) ? input.assessment : {};
     let aform = cleanStr(a.form, 30, "assessment.form");
@@ -542,7 +532,7 @@ export function validateExtraction(input) {
       monitoring_needed: cleanBool(a.monitoring_needed), monitoring_note: cleanStr(a.monitoring_note, 500, "assessment.monitoring_note"),
       surveillance_needed: cleanBool(a.surveillance_needed), surveillance_note: cleanStr(a.surveillance_note, 500, "assessment.surveillance_note"),
     };
-    return { ok: true, data: { sds, products, decision, decision_note, assessment }, warnings };
+    return { ok: true, data: { sds, products, classification, assessment }, warnings };
   } catch (e) {
     if (e instanceof TypeErr) return { ok: false, errors: [e.message] };
     throw e;
@@ -866,10 +856,19 @@ export function verifyExtraction(data, rawText) {
     if (r.dropped) flag(field);
   }
 
+  // GHS classification: checked against the H-codes really printed in the text (ghs-ref.mjs does the work).
+  // `classification` = {list, flags, removed} for a stored/verified list, or null when the AI gave none (the chemical stays unclassified).
+  let classification = null;
+  if (Array.isArray(data.classification)) {
+    const v = verifyClassification(data.classification, text);
+    classification = { list: v.list, flags: v.flags, removed: v.removed };
+    if (v.flags.length) flag("classification");
+  }
+
   // review due = issue date + 5 years, only when the issue date is verified
   const review_due = sds.issue_date ? addYearsIso(sds.issue_date, 5) : null;
   sds.review_due = review_due;
-  return { ...data, sds, unverified, warnings, review_due };
+  return { ...data, sds, classification, unverified, warnings, review_due };
 }
 
 // ---------------------------------------------------------------------------------------------

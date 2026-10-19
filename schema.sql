@@ -60,8 +60,8 @@ CREATE TABLE IF NOT EXISTS sds (
   revision TEXT,                          -- version / revision as printed
   emergency_phone TEXT,                   -- the supplier's emergency number
   review_due TEXT,                        -- issue_date + 5 years (YYYY-MM-DD); NULL when issue_date unknown
-  signal_word TEXT,                       -- 'Danger' | 'Warning' | NULL
-  hazard_classification TEXT,
+  signal_word TEXT,                       -- as printed on the SDS: 'Danger' | 'Warning' | NULL (the chemical's own signal word is DERIVED from its classification)
+  hazard_classification TEXT,             -- section 2 classification as printed, for reading; the structured classification is on the chemical
   h_statements TEXT,                      -- e.g. "H225 Highly flammable liquid and vapour; H319 ..."
   p_statements TEXT,
   poison_schedule TEXT,                   -- e.g. "S5", "S6", or NULL
@@ -71,12 +71,10 @@ CREATE TABLE IF NOT EXISTS sds (
   packing_group TEXT,                     -- 'I' | 'II' | 'III' | NULL
   hazchem_code TEXT,                      -- e.g. "3YE"
   proper_shipping_name TEXT,
-  pictograms TEXT,                        -- comma list of: toxic,health,flame,exclamation,oxidising,gas,environment,corrosive
   cas_numbers TEXT,                       -- comma list of CAS numbers found on the sheet
-  unverified TEXT,                        -- JSON array of field names the AI returned but that were NOT found in the PDF text (left blank)
+  unverified TEXT,                        -- JSON array of field names the AI returned but that were NOT found in the PDF text (left blank); includes "classification" when the H-codes did not match
   source TEXT NOT NULL DEFAULT 'manual',  -- 'upload' | 'manual' | 'import' | 'demo'
   ai_provider TEXT,                       -- which AI read it, or NULL if it was filled by hand
-  hazardous INTEGER,                      -- 1 hazardous, 0 not hazardous, NULL not decided (as read from the SDS)
   uploaded_by INTEGER REFERENCES users(id),
   uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
   replaced_at TEXT                        -- set when a newer version takes over
@@ -98,7 +96,14 @@ CREATE TABLE IF NOT EXISTS chemicals (
   product_codes TEXT,                     -- supplier part / product codes
   use_description TEXT,
   physical_form TEXT,                     -- 'liquid' | 'solid' | 'powder' | 'gas' | 'aerosol' | 'paste' | 'other'
-  decision TEXT,                          -- 'hazardous' | 'not_hazardous' | NULL (no decision yet)
+  -- GHS classification, from the Safe Work Australia poster (see public/lib/ghs-ref.mjs). JSON array of
+  -- {"c": class id, "k": category, "src": "ai"|"h_code"|"admin", "check": true if the category is unconfirmed}.
+  -- NULL = not classified yet (no decision can be derived). '[]' = classified and carries none of the classifications (non-hazardous).
+  ghs_classification TEXT,
+  classification_flags TEXT,              -- JSON array of messages: mismatches between the AI's reading and the H-codes in the SDS text
+  decision_override TEXT,                 -- 'hazardous' | 'not_hazardous' | NULL. An admin override of the derived decision (shown as overridden)
+  pictograms_override TEXT,               -- NULL, or a comma list of GHS01..GHS09, or 'none'. An admin override of the derived pictograms (shown as overridden)
+  decision TEXT,                          -- EFFECTIVE decision: decision_override, else derived from ghs_classification; NULL = no decision yet
   decision_note TEXT,                     -- why, e.g. "Not classified as hazardous per SDS section 2"
   decision_by TEXT,                       -- who decided and how: user name, or "Prepared from the SDS (AI draft)"
   decision_at TEXT,
@@ -106,9 +111,9 @@ CREATE TABLE IF NOT EXISTS chemicals (
   sds_issue_date TEXT,                    -- summary: from the current SDS
   review_due TEXT,                        -- summary: from the current SDS (the review-due list reads this)
   risk_level TEXT,                        -- summary: from the current assessment (see assessments.risk_level)
-  dg_class TEXT,                          -- summary: from the current SDS
-  signal_word TEXT,                       -- summary: from the current SDS
-  pictograms TEXT,                        -- summary: from the current SDS (comma list)
+  dg_class TEXT,                          -- summary: the ADG class from the current SDS. For illustration only: placard and manifest quantities use ghs_classification
+  signal_word TEXT,                       -- derived from ghs_classification ('Danger' | 'Warning' | NULL)
+  pictograms TEXT,                        -- EFFECTIVE pictograms: pictograms_override, else derived from ghs_classification (comma list of GHS01..GHS09)
   source TEXT NOT NULL DEFAULT 'manual',  -- 'upload' | 'manual' | 'import' | 'demo'
   search_text TEXT NOT NULL DEFAULT '',   -- lower-case name, supplier, synonyms, codes, CAS (maintained by the Worker)
   created_by INTEGER REFERENCES users(id),
@@ -121,8 +126,8 @@ CREATE INDEX IF NOT EXISTS idx_chem_review ON chemicals(review_due);
 CREATE INDEX IF NOT EXISTS idx_chem_decision ON chemicals(decision);
 CREATE INDEX IF NOT EXISTS idx_chem_risk ON chemicals(risk_level);
 
--- Storage locations: where a chemical is kept and how much. Quantities are totalled by dangerous
--- goods class for the manifest.
+-- Storage locations: where a chemical is kept and how much. Quantities are totalled for each placard / manifest
+-- item (Schedule 11, by GHS hazard class and category) across the site.
 CREATE TABLE IF NOT EXISTS storage_locations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chemical_id INTEGER NOT NULL REFERENCES chemicals(id) ON DELETE CASCADE,
@@ -130,6 +135,7 @@ CREATE TABLE IF NOT EXISTS storage_locations (
   quantity REAL NOT NULL DEFAULT 0,
   unit TEXT NOT NULL DEFAULT 'L',         -- 'L' | 'kg'
   container_note TEXT,                    -- e.g. "4 x 5 L drums"
+  spill_compound TEXT,                    -- optional: locations that share a spill compound use the same text (default: the location). Used by the flammable liquid category 4 rule
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_loc_chem ON storage_locations(chemical_id);

@@ -191,12 +191,14 @@
     const showDate = date && (status === 'overdue' || status === 'due_soon' || status === 'ok');
     return `<span class="badge ${App.esc(status || 'unknown')}">${App.esc(label)}${showDate ? ' · ' + App.esc(App.fmtDate(date)) : ''}</span>`;
   };
-  App.decisionLabel = (d) => d === 'hazardous' ? 'Hazardous' : d === 'not_hazardous' ? 'Not hazardous' : 'Not checked yet';
+  App.decisionLabel = (d) => d === 'hazardous' ? 'Hazardous' : d === 'not_hazardous' ? 'Not hazardous' : 'Not classified yet';
   App.decisionBadge = (d) => `<span class="badge dec-${d || 'none'}">${App.decisionLabel(d)}</span>`;
 
-  // Fallbacks; views/pictograms.js replaces these with the real icons.
-  App.pictogramSvg = App.pictogramSvg || ((code) => `<span class="badge none">${App.esc(code)}</span>`);
-  App.pictogramRow = App.pictogramRow || ((list) => '');
+  // Fallbacks; views/pictograms.js replaces these with the real images.
+  App.pictogramImg = App.pictogramImg || (() => "");
+  App.pictogramRow = App.pictogramRow || (() => "");
+  // A small marker for a value an admin has overridden (shown wherever the effective value is shown in a list).
+  App.overrideMark = (on, what) => on ? `<span class="ovr" title="An admin overrode the ${what} that the classification gives">overridden</span>` : "";
 
   // ---------------------------------------------------------------- disclaimer, branding, print
   App.disclaimerHtml = function () {
@@ -486,6 +488,6 @@
     if (started) return Promise.resolve();
     started = true;
     wireLogin();
-    return boot();
+    return Promise.resolve(App.ghsReady).catch((e) => console.error(e)).then(boot);
   };
 })();
