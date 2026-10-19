@@ -1,0 +1,540 @@
+/* Chemical page (#/chemical/:id) and the admin edit screen (#/chemical/:id/edit). */
+(function () {
+  const App = window.App;
+  const esc = App.esc;
+  const FORMS = ['liquid', 'solid', 'powder', 'gas', 'aerosol', 'paste', 'other'];
+  const KINDS = [
+    ['isolation', 'Isolation'], ['ventilation', 'Ventilation'], ['other', 'Other controls'],
+    ['ppe', 'PPE'], ['additional_ppe', 'Additional PPE'],
+  ];
+  const FIELD_NAMES = {
+    issue_date: 'SDS issue date', revision: 'Revision', emergency_phone: 'Emergency phone', signal_word: 'Signal word',
+    hazard_classification: 'Hazard classification', h_statements: 'Hazard statements', p_statements: 'Precautionary statements',
+    poison_schedule: 'Poison schedule', un_number: 'UN number', dg_class: 'Dangerous goods class', subsidiary_class: 'Subsidiary class',
+    packing_group: 'Packing group', hazchem_code: 'Hazchem code', proper_shipping_name: 'Proper shipping name', pictograms: 'Pictograms',
+    cas_numbers: 'CAS numbers', supplier: 'Supplier', title: 'Product name on the SDS', fire_response: 'Fire response', spill_response: 'Spill response',
+    use_description: 'Description of use', controls_notes: 'Control notes', ppe_notes: 'PPE notes',
+  };
+  const fieldName = (f) => FIELD_NAMES[f] || String(f).replace(/_/g, ' ');
+
+  // ------------------------------------------------------------ small helpers
+  const nl = (s) => esc(s).replace(/\r?\n/g, '<br>');
+  function list(v) {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    try { const x = JSON.parse(v); return Array.isArray(x) ? x : []; } catch (e) { return []; }
+  }
+  const FLAG = '<span class="flag">Not found in the SDS text, check</span>';
+  function kvRow(label, value, field, unv) {
+    const has = value !== null && value !== undefined && String(value).trim() !== '';
+    const html = has ? (typeof value === 'object' && value.html ? value.html : nl(value)) : '<span class="none">Not recorded</span>';
+    return `<dt>${esc(label)}</dt><dd>${html}${field && unv && unv.has(field) ? FLAG : ''}</dd>`;
+  }
+  const fmtQty = (q) => Number(q).toLocaleString(undefined, { maximumFractionDigits: 3 });
+  const tick = (label, on, stack) => `<span class="tick${on ? ' on' : ''}${stack ? ' stack' : ''}">${esc(label)}<span class="sr-only"> (${on ? 'ticked' : 'not ticked'})</span></span>`;
+  const phoneLink = (p) => p ? { html: `<a href="tel:${esc(String(p).replace(/[^\d+]/g, ''))}">${esc(p)}</a>` } : '';
+
+  // ------------------------------------------------------------ the assessment checklist (screen and print)
+  function assessmentTable(d) {
+    const a = d.assessment, c = d.chemical, s = d.sds;
+    const unv = new Set([...list(a.unverified)]);
+    const by = {};
+    (a.controls || []).forEach((o) => { (by[o.kind] = by[o.kind] || []).push(o.label); });
+    const group = (kind, title) => `<div class="ctl-group"><b>${title}</b>${by[kind] && by[kind].length ? `<ul>${by[kind].map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : '<span class="muted">None selected</span>'}</div>`;
+    const yn = (needed, note) => `${tick('Yes', needed === 1 || needed === true)}${tick('No', needed === 0 || needed === false)}${needed === null || needed === undefined ? '<span class="muted">Not decided yet</span>' : ''}${note ? `<div>${nl(note)}</div>` : ''}`;
+    const row = (label, html, field) => `<tr><th scope="row">${esc(label)}</th><td>${html}${field && unv.has(field) ? FLAG : ''}</td></tr>`;
+    const text = (v) => v && String(v).trim() ? nl(v) : '<span class="muted">Not recorded</span>';
+    const phone = s && s.emergency_phone ? ` <span class="muted">Emergency phone:</span> ${esc(s.emergency_phone)}` : '';
+    return `<table class="checklist"><tbody>
+      ${row('Product', `<strong>${esc(c.product_name)}</strong>`)}
+      ${row('Supplier and phone', (c.supplier ? esc(c.supplier) : '<span class="muted">Not recorded</span>') + phone)}
+      ${row('Date of assessment', a.assessed_date ? esc(App.fmtDate(a.assessed_date)) : '<span class="muted">Not recorded</span>')}
+      ${row('SDS date', (a.sds_date || (s && s.issue_date)) ? esc(App.fmtDate(a.sds_date || s.issue_date)) : '<span class="muted">Not recorded</span>')}
+      ${row('Form', a.form || c.physical_form ? esc(a.form || c.physical_form) : '<span class="muted">Not recorded</span>')}
+      ${row('Description of use', text(a.use_description || c.use_description), 'use_description')}
+      ${row('Routes of entry', tick('Inhalation', a.route_inhalation) + tick('Ingestion', a.route_ingestion) + tick('Absorption (skin or eyes)', a.route_absorption))}
+      ${row('Fire response', text(a.fire_response), 'fire_response')}
+      ${row('Spill response', text(a.spill_response), 'spill_response')}
+      ${row('Controls', group('isolation', 'Isolation') + group('ventilation', 'Ventilation') + group('other', 'Other') + (a.controls_notes ? `<div>${nl(a.controls_notes)}</div>` : ''), 'controls_notes')}
+      ${row('PPE', group('ppe', 'PPE') + group('additional_ppe', 'Additional PPE') + (a.ppe_notes ? `<div>${nl(a.ppe_notes)}</div>` : ''), 'ppe_notes')}
+      ${row('Level of risk', `<div class="risk-options">${App.RISK_LEVELS.map((l) => tick(App.riskLabel(l), a.risk_level === l)).join('')}</div>`)}
+      ${row('Atmospheric monitoring needed', yn(a.monitoring_needed, a.monitoring_note))}
+      ${row('Health surveillance needed', yn(a.surveillance_needed, a.surveillance_note))}
+      ${row('Assessed by and date', `${a.assessed_by ? esc(a.assessed_by) : '<span class="muted">Not recorded</span>'}${a.assessed_date ? ' on ' + esc(App.fmtDate(a.assessed_date)) : ''}`)}
+    </tbody></table>`;
+  }
+
+  function aiNote(a) {
+    if (a.source === 'ai') {
+      return `<div class="notice"><span class="badge ai">Prepared from the SDS</span> on ${esc(App.fmtDate(a.created_at))}. This is a draft. Read it, check it against the SDS and your own workplace, and correct anything that is wrong.</div>`;
+    }
+    if (a.source === 'blank') return '<div class="notice warn">This assessment has not been filled in yet. The level of risk is "Uncertain" until someone completes it.</div>';
+    return '';
+  }
+
+  function hazardSummaryLine(d) {
+    const s = d.sds || {};
+    const bits = [s.signal_word, s.dg_class ? 'DG class ' + s.dg_class : '', s.un_number ? 'UN ' + s.un_number : ''].filter(Boolean);
+    return `<div style="margin:6px 0 10px">${App.pictogramRow(s.pictograms, 34)} ${bits.length ? `<strong>${esc(bits.join(' · '))}</strong>` : ''}</div>`;
+  }
+
+  function printAssessment(d) {
+    const c = d.chemical, a = d.assessment;
+    const locs = (d.locations || []).slice(0, 8);
+    const locHtml = locs.length ? `<p style="margin:8px 0 2px"><strong>Stored at:</strong> ${locs.map((l) => esc(l.location) + ' (' + fmtQty(l.quantity) + ' ' + esc(l.unit) + ')').join('; ')}</p>` : '';
+    App.print(`${App.printHeaderHtml()}<h1>Hazard risk assessment: ${esc(c.product_name)}</h1>
+      <div class="print-sub">${esc(c.supplier || '')}${c.supplier ? ' · ' : ''}Printed ${esc(App.fmtDate(App.today()))}</div>
+      ${hazardSummaryLine(d)}
+      ${a.source === 'ai' ? `<p style="margin:0 0 6px"><strong>Prepared from the SDS</strong> on ${esc(App.fmtDate(a.created_at))} (draft, to be checked).</p>` : ''}
+      ${assessmentTable(d)}${locHtml}
+      <div style="margin-top:10px">${App.disclaimerHtml()}</div>`);
+  }
+
+  // ------------------------------------------------------------ view screen
+  async function renderView(root, id) {
+    root.innerHTML = App.loadingHtml('Loading chemical...');
+    let d;
+    try { d = await App.api('/chemicals/' + encodeURIComponent(id)); }
+    catch (err) {
+      if (err.status === 404) { root.innerHTML = '<div class="empty-state"><h2>Chemical not found</h2><p>It may have been removed.</p><a class="btn primary" href="#/register">Back to the register</a></div>'; return; }
+      throw err;
+    }
+    const c = d.chemical, s = d.sds, a = d.assessment, admin = App.isAdmin();
+    const sdsUnv = new Set(list(s && s.unverified));
+    document.title = c.product_name + ' - ' + App.companyName();
+    const unvAll = [...new Set([...sdsUnv, ...list(a && a.unverified)])];
+
+    let html = `<a class="crumb no-print" href="#/${c.decision === 'hazardous' ? 'hazardous' : 'register'}">&larr; ${c.decision === 'hazardous' ? 'Hazardous register' : 'Register'}</a>
+      <div class="chem-head">
+        <div class="topbar" style="margin-bottom:0"><h1>${esc(c.product_name)}</h1>
+          <div class="actions no-print">
+            ${a ? '<button type="button" id="printBtn">Print assessment</button>' : ''}
+            <a class="btn" href="#/chemical/${c.id}/label">QR label</a>
+            ${admin ? `<a class="btn primary" href="#/chemical/${c.id}/edit">Edit</a>` : ''}
+          </div></div>
+        <div class="muted">${esc(c.supplier || 'Supplier not recorded')}</div>
+        <div class="badges">${App.decisionBadge(c.decision)}${App.reviewBadge(c.review_status, c.review_due)}${c.decision === 'not_hazardous' ? '' : App.riskBadge(a ? a.risk_level : c.risk_level)}</div>
+      </div>
+      ${App.disclaimerHtml()}`;
+
+    if (unvAll.length) {
+      html += `<div class="notice warn" role="note"><strong>Check these details.</strong> They were not found in the text of the SDS, so they have been left blank: ${unvAll.map((f) => esc(fieldName(f))).join(', ')}. Look at the SDS itself and fill them in.</div>`;
+    }
+
+    // Product details
+    html += `<section class="card"><h2>Product details</h2><dl class="kv">
+      ${kvRow('Product', c.product_name)}
+      ${kvRow('Supplier', c.supplier)}
+      ${kvRow('Other names', c.synonyms)}
+      ${kvRow('Product codes', c.product_codes)}
+      ${kvRow('Form', c.physical_form)}
+      ${kvRow('What it is used for', c.use_description)}
+      ${kvRow('Hazardous or not', { html: App.decisionBadge(c.decision) + (c.decision_by ? ` <span class="muted small-text">decided by ${esc(c.decision_by)}${c.decision_at ? ' on ' + esc(App.fmtDate(c.decision_at)) : ''}</span>` : '') })}
+      ${c.decision_note ? kvRow('Reason', c.decision_note) : ''}
+    </dl></section>`;
+
+    // Hazard data
+    if (s) {
+      html += `<section class="card"><h2>Hazard information from the SDS</h2>
+        ${s.pictograms ? `<div style="margin-bottom:10px">${App.pictogramRow(s.pictograms, 56)}<div class="picto-names">${esc(App.pictogramNames(s.pictograms))}</div></div>` : (sdsUnv.has('pictograms') ? `<p>${FLAG}</p>` : '<p class="muted">No hazard pictograms recorded.</p>')}
+        <dl class="kv">
+          ${kvRow('Signal word', s.signal_word, 'signal_word', sdsUnv)}
+          ${kvRow('Hazard classification', s.hazard_classification, 'hazard_classification', sdsUnv)}
+          ${kvRow('Hazard statements', s.h_statements, 'h_statements', sdsUnv)}
+          ${kvRow('Precautionary statements', s.p_statements, 'p_statements', sdsUnv)}
+          ${kvRow('Poison schedule', s.poison_schedule, 'poison_schedule', sdsUnv)}
+          ${kvRow('CAS numbers', s.cas_numbers, 'cas_numbers', sdsUnv)}
+          ${kvRow('UN number', s.un_number, 'un_number', sdsUnv)}
+          ${kvRow('Dangerous goods class', s.dg_class, 'dg_class', sdsUnv)}
+          ${kvRow('Subsidiary class', s.subsidiary_class, 'subsidiary_class', sdsUnv)}
+          ${kvRow('Packing group', s.packing_group, 'packing_group', sdsUnv)}
+          ${kvRow('Hazchem code', s.hazchem_code, 'hazchem_code', sdsUnv)}
+          ${kvRow('Proper shipping name', s.proper_shipping_name, 'proper_shipping_name', sdsUnv)}
+        </dl></section>`;
+    }
+
+    // SDS card
+    const total = d.sds_products_total != null ? d.sds_products_total : (d.sds_products || []).length;
+    html += `<section class="card"><div class="card-head"><h2>Safety data sheet</h2>${s && s.has_file ? `<a class="btn primary no-print" href="/api/sds/${s.id}/file" target="_blank" rel="noopener">View the PDF</a>` : ''}</div>`;
+    if (!s) {
+      html += `<div class="empty-state" style="padding:18px"><h2>No SDS on file</h2><p>${admin ? 'Attach the safety data sheet so the hazard details and review date can be kept up to date.' : 'Ask an admin to attach one, or upload it from Upload SDS.'}</p>${admin ? `<a class="btn primary" href="#/chemical/${c.id}/edit?focus=sds">Attach an SDS</a>` : '<a class="btn" href="#/upload">Upload SDS</a>'}</div>`;
+    } else {
+      html += `<dl class="kv">
+        ${kvRow('Issue date', s.issue_date ? App.fmtDate(s.issue_date) : '', 'issue_date', sdsUnv)}
+        ${kvRow('Revision', s.revision, 'revision', sdsUnv)}
+        ${kvRow('Emergency phone', phoneLink(s.emergency_phone), 'emergency_phone', sdsUnv)}
+        ${kvRow('Review due', { html: App.reviewBadge(c.review_status, s.review_due || c.review_due) })}
+        ${kvRow('Version', s.version_no ? 'Version ' + s.version_no : '')}
+        ${kvRow('File', s.has_file ? s.file_name : { html: '<span class="none">No PDF attached</span>' })}
+      </dl>`;
+      if (total > 0) {
+        html += `<details class="lazy" id="prodDetails"><summary>Also covers ${total} other product${total === 1 ? '' : 's'}</summary><ul class="mini-list" id="prodList">${(d.sds_products || []).map((p) => `<li><a href="#/chemical/${p.id}">${esc(p.product_name)}</a></li>`).join('')}</ul></details>`;
+      }
+      html += `<details class="lazy" id="histDetails"><summary>Version history</summary><div id="histBody" class="muted">Loading...</div></details>`;
+    }
+    html += '</section>';
+
+    // Assessment
+    html += `<section class="card" id="assessCard"><div class="card-head"><h2>Hazard risk assessment</h2>${admin ? `<a class="btn no-print" href="#/chemical/${c.id}/edit?focus=assessment">${a ? 'Edit assessment' : 'Start assessment'}</a>` : ''}</div>`;
+    if (c.decision === 'not_hazardous' && !a) {
+      html += `<div class="notice"><strong>Checked: not hazardous.</strong> No risk assessment is needed for this chemical.${c.decision_note ? ' ' + esc(c.decision_note) : ''}</div>`;
+    } else if (a) {
+      if (c.decision === 'not_hazardous') html += '<div class="notice">This chemical has been checked and is not hazardous. An assessment is shown because one was already made.</div>';
+      html += aiNote(a) + hazardSummaryLine(d) + assessmentTable(d);
+      html += `<details class="lazy no-print" id="assessHist"><summary>Older assessments</summary><div id="assessHistBody" class="muted">Loading...</div></details>`;
+    } else {
+      html += `<div class="empty-state" style="padding:18px"><h2>${c.decision ? 'No assessment yet' : 'Not checked yet'}</h2><p>${c.decision ? 'There is no risk assessment for this chemical yet.' : 'Nobody has decided yet whether this chemical is hazardous. Read the SDS, then record the decision.'}</p>${admin ? `<a class="btn primary" href="#/chemical/${c.id}/edit?focus=${c.decision ? 'assessment' : 'details'}">${c.decision ? 'Start assessment' : 'Record the decision'}</a>` : ''}</div>`;
+    }
+    html += '</section>';
+
+    // Locations
+    const locs = d.locations || [];
+    html += `<section class="card"><div class="card-head"><h2>Where it is stored</h2>${admin ? `<a class="btn no-print" href="#/chemical/${c.id}/edit?focus=locations">Edit locations</a>` : ''}</div>`;
+    if (!locs.length) html += '<p class="muted" style="margin:0">No storage location recorded.</p>';
+    else html += `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Containers</th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Containers">${esc(l.container_note || '')}</td></tr>`).join('')}</tbody></table>`;
+    html += '</section>';
+
+    root.innerHTML = html;
+
+    const pb = root.querySelector('#printBtn');
+    if (pb) pb.addEventListener('click', () => printAssessment(d));
+
+    const prod = root.querySelector('#prodDetails');
+    if (prod && total > (d.sds_products || []).length) {
+      prod.addEventListener('toggle', async function once() {
+        if (!prod.open) return;
+        prod.removeEventListener('toggle', once);
+        try {
+          const r = await App.api(`/sds/${s.id}/chemicals`);
+          const items = (r.items || r.chemicals || r || []).filter((p) => String(p.id) !== String(c.id));
+          root.querySelector('#prodList').innerHTML = items.map((p) => `<li><a href="#/chemical/${p.id}">${esc(p.product_name)}</a></li>`).join('');
+        } catch (e) { /* keep what we have */ }
+      });
+    }
+
+    let histData = null;
+    async function loadHistory() {
+      if (histData) return histData;
+      histData = await App.api(`/chemicals/${c.id}/history`);
+      return histData;
+    }
+    const hd = root.querySelector('#histDetails');
+    if (hd) hd.addEventListener('toggle', async function once() {
+      if (!hd.open) return;
+      hd.removeEventListener('toggle', once);
+      const body = root.querySelector('#histBody');
+      try {
+        const h = await loadHistory();
+        const v = h.sds_versions || [];
+        body.className = '';
+        body.innerHTML = v.length ? `<ul class="mini-list">${v.map((x) => `<li><strong>Version ${x.version_no}</strong>${x.is_current ? ' <span class="badge ok">Current</span>' : ''}<span>Issued ${x.issue_date ? esc(App.fmtDate(x.issue_date)) : 'date not recorded'}</span><span class="muted">added ${esc(App.fmtDate(x.uploaded_at))}</span>${x.file_name ? `<a href="/api/sds/${x.id}/file" target="_blank" rel="noopener">View PDF</a>` : ''}</li>`).join('')}</ul>` : '<p class="muted">No earlier versions.</p>';
+      } catch (e) { body.textContent = 'Could not load the history: ' + e.message; }
+    });
+    const ah = root.querySelector('#assessHist');
+    if (ah) ah.addEventListener('toggle', async function once() {
+      if (!ah.open) return;
+      ah.removeEventListener('toggle', once);
+      const body = root.querySelector('#assessHistBody');
+      try {
+        const h = await loadHistory();
+        const older = h.assessments || [];
+        body.className = '';
+        body.innerHTML = older.length ? `<ul class="mini-list">${older.map((x) => `<li><span>${x.assessed_date ? esc(App.fmtDate(x.assessed_date)) : esc(App.fmtDate(x.created_at))}</span>${App.riskBadge(x.risk_level, true)}<span class="muted">${esc(x.assessed_by || '')}</span><button type="button" class="small" data-old="${x.id}">View</button></li>`).join('')}</ul>` : '<p class="muted">No older assessments.</p>';
+        body.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-old]'); if (!b) return;
+          try {
+            const old = await App.api('/assessments/' + b.dataset.old);
+            const aa = old.assessment || old;
+            App.modal({ title: 'Older assessment', wide: true, body: `<div class="notice warn">This is an older assessment, kept for the record.</div>` + assessmentTable({ chemical: c, sds: s, assessment: aa }) });
+          } catch (er) { App.toast(er.message, 'error'); }
+        });
+      } catch (e) { body.textContent = 'Could not load older assessments: ' + e.message; }
+    });
+  }
+
+  // ------------------------------------------------------------ edit screen (admin)
+  const inp = (id, label, val, extra) => `<label for="${id}">${label}</label><input id="${id}" value="${esc(val == null ? '' : val)}" ${extra || ''}>`;
+  const area = (id, label, val, rows) => `<label for="${id}">${label}</label><textarea id="${id}" rows="${rows || 2}">${esc(val == null ? '' : val)}</textarea>`;
+  const select = (id, label, opts, val) => `<label for="${id}">${label}</label><select id="${id}">${opts.map((o) => `<option value="${esc(o[0])}"${String(o[0]) === String(val == null ? '' : val) ? ' selected' : ''}>${esc(o[1])}</option>`).join('')}</select>`;
+  const formOpts = [['', 'Not recorded']].concat(FORMS.map((f) => [f, f[0].toUpperCase() + f.slice(1)]));
+
+  async function renderEdit(root, id, params) {
+    if (!App.isAdmin()) { App.navigate('#/chemical/' + id); return; }
+    root.innerHTML = App.loadingHtml('Loading chemical...');
+    let d = await App.api('/chemicals/' + encodeURIComponent(id));
+    let optionsCache = null;
+    document.title = 'Edit ' + d.chemical.product_name + ' - ' + App.companyName();
+
+    root.innerHTML = `<a class="crumb" href="#/chemical/${id}">&larr; Back to the chemical</a>
+      <div class="topbar"><div><h1 id="editTitle"></h1><p class="sub">Changes are saved one section at a time.</p></div></div>
+      <section class="card" id="cardDetails"></section>
+      <section class="card" id="cardSds"></section>
+      <section class="card" id="cardAssess"></section>
+      <section class="card" id="cardLocs"></section>
+      <section class="card" id="cardDanger"></section>`;
+    const $ = (s) => root.querySelector(s);
+
+    async function reload(...cards) {
+      d = await App.api('/chemicals/' + encodeURIComponent(id));
+      drawTitle();
+      cards.forEach((n) => draw[n]());
+    }
+    function drawTitle() { $('#editTitle').textContent = 'Edit: ' + d.chemical.product_name; }
+
+    const draw = {
+      details() {
+        const c = d.chemical;
+        $('#cardDetails').innerHTML = `<h2>Product details and decision</h2><form id="fDetails">
+          ${inp('c_name', 'Product name', c.product_name, 'required')}
+          ${inp('c_supplier', 'Supplier', c.supplier)}
+          ${area('c_syn', 'Other names (one per line or separated by commas)', c.synonyms)}
+          ${inp('c_codes', 'Product codes', c.product_codes)}
+          ${area('c_use', 'What it is used for', c.use_description)}
+          <div class="row2">${select('c_form', 'Form', formOpts, c.physical_form)}
+          ${select('c_dec', 'Is it hazardous?', [['', 'Not checked yet'], ['hazardous', 'Hazardous'], ['not_hazardous', 'Not hazardous']], c.decision)}</div>
+          ${area('c_note', 'Reason for the decision (for example: Not classified as hazardous, SDS section 2)', c.decision_note)}
+          <p class="hint">${c.decision_by ? 'Last decided by ' + esc(c.decision_by) + (c.decision_at ? ' on ' + esc(App.fmtDate(c.decision_at)) : '') + '.' : 'No decision recorded yet.'}</p>
+          <div class="actions" style="margin-top:12px"><button class="primary" type="submit">Save details</button></div></form>`;
+        $('#fDetails').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const btn = e.target.querySelector('button.primary'); btn.disabled = true;
+          try {
+            await App.api('/chemicals/' + id, { method: 'PUT', body: {
+              product_name: $('#c_name').value.trim(), supplier: $('#c_supplier').value.trim(), synonyms: $('#c_syn').value.trim(),
+              product_codes: $('#c_codes').value.trim(), use_description: $('#c_use').value.trim(), physical_form: $('#c_form').value || null,
+              decision: $('#c_dec').value || null, decision_note: $('#c_note').value.trim(),
+            } });
+            App.toast('Details saved.', 'ok');
+            await reload('details');
+          } catch (err) { App.toast(err.message, 'error'); }
+          finally { btn.disabled = false; }
+        });
+      },
+
+      sds() {
+        const s = d.sds, others = d.sds_products_total != null ? d.sds_products_total : (d.sds_products || []).length;
+        let h = '<h2>Safety data sheet</h2>';
+        if (!s) {
+          h += '<p class="muted">No SDS is attached to this chemical.</p><div class="actions"><button type="button" class="primary" id="sdsAttach">Attach an SDS</button></div>';
+        } else {
+          h += `<dl class="kv">${kvRow('Version', 'Version ' + s.version_no)}${kvRow('Issue date', s.issue_date ? App.fmtDate(s.issue_date) : '')}${kvRow('Review due', s.review_due ? App.fmtDate(s.review_due) : '')}${kvRow('File', s.has_file ? s.file_name : '')}</dl>`;
+          if (others > 0) h += `<div class="notice warn" style="margin-top:12px">This SDS is shared with ${others} other product${others === 1 ? '' : 's'}. Changing or replacing it changes it for all of them.</div>`;
+          h += `<div class="actions" style="margin-top:12px">${s.has_file ? `<a class="btn" href="/api/sds/${s.id}/file" target="_blank" rel="noopener">View the PDF</a>` : ''}<button type="button" id="sdsEdit">Edit SDS details</button><button type="button" class="primary" id="sdsReplace">Replace with a newer version</button><button type="button" class="danger" id="sdsUnlink">Remove from this product</button></div>`;
+        }
+        $('#cardSds').innerHTML = h;
+        const on = (sel, fn) => { const b = $(sel); if (b) b.addEventListener('click', fn); };
+        on('#sdsAttach', () => sdsModal('attach'));
+        on('#sdsEdit', () => sdsModal('edit'));
+        on('#sdsReplace', () => sdsModal('replace'));
+        on('#sdsUnlink', async () => {
+          if (!await App.confirm('Take this SDS off this chemical? The SDS itself is kept if other products use it.', { okLabel: 'Remove', danger: true })) return;
+          try { await App.api(`/chemicals/${id}/unlink-sds`, { method: 'POST', body: {} }); App.toast('SDS removed from this chemical.', 'ok'); await reload('sds', 'assess'); }
+          catch (err) { App.toast(err.message, 'error'); }
+        });
+      },
+
+      async assess() {
+        const box = $('#cardAssess');
+        box.innerHTML = '<h2>Hazard risk assessment</h2>' + App.loadingHtml('Loading...');
+        if (!optionsCache) {
+          try { optionsCache = await App.api('/options'); }
+          catch (err) { box.innerHTML = '<h2>Hazard risk assessment</h2>'; App.showError(box, err, () => draw.assess()); return; }
+        }
+        const a = d.assessment, c = d.chemical, s = d.sds;
+        const v = a || {
+          assessed_date: App.today(), sds_date: s ? s.issue_date : '', form: c.physical_form, use_description: c.use_description,
+          risk_level: 'uncertain', assessed_by: App.me.name, controls: [],
+        };
+        const selected = new Set((v.controls || []).map((o) => String(o.id)));
+        const selLabels = new Set((v.controls || []).map((o) => o.kind + '|' + o.label));
+        const isSel = (kind, o) => selected.has(String(o.id)) || selLabels.has(kind + '|' + o.label);
+        const ctl = (kind, title) => {
+          const opts = (optionsCache[kind] || []).filter((o) => o.active !== 0 || isSel(kind, o));
+          return `<fieldset><legend>${title}</legend><div class="checks">${opts.length ? opts.map((o) => `<label class="inline"><input type="checkbox" name="ctl" value="${o.id}"${isSel(kind, o) ? ' checked' : ''}> ${esc(o.label)}${o.active === 0 ? ' (no longer offered)' : ''}</label>`).join('') : '<span class="muted">No options. Add some under Options.</span>'}</div></fieldset>`;
+        };
+        const tri = (name, val) => `<div class="actions">${[['1', 'Yes'], ['0', 'No'], ['', 'Not decided']].map((o) => `<label class="inline"><input type="radio" name="${name}" value="${o[0]}"${(val === null || val === undefined ? '' : String(val ? 1 : 0)) === o[0] ? ' checked' : ''}> ${o[1]}</label>`).join('')}</div>`;
+        const unv = list(a && a.unverified);
+        box.innerHTML = `<h2>Hazard risk assessment</h2>
+          ${a ? aiNote(a) : '<p class="muted">There is no assessment yet. Fill this in from the SDS.</p>'}
+          ${unv.length ? `<div class="notice warn">Not found in the SDS text, check: ${unv.map((f) => esc(fieldName(f))).join(', ')}.</div>` : ''}
+          <form id="fAssess">
+          <div class="row2">${inp('a_date', 'Date of assessment', v.assessed_date, 'type="date"')}${inp('a_sds', 'SDS date', v.sds_date, 'type="date"')}</div>
+          <div class="row2">${select('a_form', 'Form', formOpts, v.form)}${inp('a_by', 'Assessed by', v.assessed_by)}</div>
+          ${area('a_use', 'Description of use', v.use_description, 2)}
+          <fieldset><legend>Routes of entry</legend><div class="checks">
+            <label class="inline"><input type="checkbox" id="a_inh"${v.route_inhalation ? ' checked' : ''}> Inhalation</label>
+            <label class="inline"><input type="checkbox" id="a_ing"${v.route_ingestion ? ' checked' : ''}> Ingestion</label>
+            <label class="inline"><input type="checkbox" id="a_abs"${v.route_absorption ? ' checked' : ''}> Absorption (skin or eyes)</label></div></fieldset>
+          ${area('a_fire', 'Fire response', v.fire_response, 3)}
+          ${area('a_spill', 'Spill response', v.spill_response, 3)}
+          ${ctl('isolation', 'Isolation controls')}${ctl('ventilation', 'Ventilation controls')}${ctl('other', 'Other controls')}
+          ${area('a_cnotes', 'Other control notes', v.controls_notes)}
+          ${ctl('ppe', 'PPE')}${ctl('additional_ppe', 'Additional PPE')}
+          ${area('a_pnotes', 'Other PPE notes', v.ppe_notes)}
+          <fieldset><legend>Level of risk</legend>${App.RISK_LEVELS.map((l) => `<label class="inline"><input type="radio" name="a_risk" value="${l}"${(v.risk_level || 'uncertain') === l ? ' checked' : ''}> ${esc(App.riskLabel(l))}</label>`).join('')}</fieldset>
+          <fieldset><legend>Atmospheric monitoring needed?</legend>${tri('a_mon', v.monitoring_needed)}${inp('a_mnote', 'Note', v.monitoring_note)}</fieldset>
+          <fieldset><legend>Health surveillance needed?</legend>${tri('a_sur', v.surveillance_needed)}${inp('a_snote', 'Note', v.surveillance_note)}</fieldset>
+          <div class="sticky-save actions">
+            ${a ? '<button class="primary" type="submit" data-mode="put">Save changes</button><button type="submit" data-mode="post">Save as a new version</button><button type="button" class="danger" id="a_del">Delete this assessment</button>' : '<button class="primary" type="submit" data-mode="post">Save assessment</button>'}
+          </div>
+          ${a ? '<p class="hint">"Save as a new version" keeps the current one in the history and makes this one current.</p>' : ''}</form>`;
+        let mode = 'put';
+        box.querySelectorAll('button[type=submit]').forEach((b) => b.addEventListener('click', () => { mode = b.dataset.mode; }));
+        const tri2 = (name) => { const r = box.querySelector(`input[name=${name}]:checked`); return !r || r.value === '' ? null : Number(r.value); };
+        $('#fAssess').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const body = {
+            assessed_date: $('#a_date').value || null, sds_date: $('#a_sds').value || null, form: $('#a_form').value || null,
+            use_description: $('#a_use').value.trim(), route_inhalation: $('#a_inh').checked ? 1 : 0, route_ingestion: $('#a_ing').checked ? 1 : 0,
+            route_absorption: $('#a_abs').checked ? 1 : 0, fire_response: $('#a_fire').value.trim(), spill_response: $('#a_spill').value.trim(),
+            controls_notes: $('#a_cnotes').value.trim(), ppe_notes: $('#a_pnotes').value.trim(),
+            risk_level: (box.querySelector('input[name=a_risk]:checked') || {}).value || 'uncertain',
+            monitoring_needed: tri2('a_mon'), monitoring_note: $('#a_mnote').value.trim(),
+            surveillance_needed: tri2('a_sur'), surveillance_note: $('#a_snote').value.trim(),
+            assessed_by: $('#a_by').value.trim(),
+            control_option_ids: [...box.querySelectorAll('input[name=ctl]:checked')].map((x) => Number(x.value)),
+          };
+          const btns = box.querySelectorAll('button'); btns.forEach((b) => { b.disabled = true; });
+          try {
+            if (a && mode === 'put') await App.api('/assessments/' + a.id, { method: 'PUT', body });
+            else await App.api(`/chemicals/${id}/assessments`, { method: 'POST', body });
+            App.toast('Assessment saved.', 'ok');
+            await reload('assess');
+          } catch (err) { App.toast(err.message, 'error'); btns.forEach((b) => { b.disabled = false; }); }
+        });
+        const del = $('#a_del');
+        if (del) del.addEventListener('click', async () => {
+          if (!await App.confirm('Delete this assessment? This cannot be undone.', { okLabel: 'Delete', danger: true })) return;
+          try { await App.api('/assessments/' + a.id, { method: 'DELETE' }); App.toast('Assessment deleted.', 'ok'); await reload('assess'); }
+          catch (err) { App.toast(err.message, 'error'); }
+        });
+      },
+
+      locs() {
+        const locs = d.locations || [];
+        $('#cardLocs').innerHTML = `<div class="card-head"><h2>Storage locations</h2><button type="button" class="primary" id="locAdd">Add a location</button></div>
+          ${locs.length ? `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Containers</th><th></th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Containers">${esc(l.container_note || '')}</td><td><button type="button" class="small" data-loc="${l.id}">Edit</button> <button type="button" class="small danger" data-locdel="${l.id}">Delete</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No storage location recorded yet.</p>'}`;
+        $('#locAdd').addEventListener('click', () => locModal(null));
+        $('#cardLocs').onclick = async (e) => {
+          const ed = e.target.closest('[data-loc]');
+          if (ed) { locModal(locs.find((l) => String(l.id) === ed.dataset.loc)); return; }
+          const dl = e.target.closest('[data-locdel]');
+          if (dl) {
+            if (!await App.confirm('Delete this storage location?', { okLabel: 'Delete', danger: true })) return;
+            try { await App.api('/locations/' + dl.dataset.locdel, { method: 'DELETE' }); await reload('locs'); }
+            catch (err) { App.toast(err.message, 'error'); }
+          }
+        };
+      },
+
+      danger() {
+        $('#cardDanger').innerHTML = `<h2>Delete this chemical</h2><p class="muted">This removes the chemical, its storage locations and its assessments. The SDS and its PDF are removed too, unless another product uses them.</p><button type="button" class="danger" id="chemDel">Delete this chemical</button>`;
+        $('#chemDel').addEventListener('click', async () => {
+          if (!await App.confirm(`Delete "${d.chemical.product_name}" for good?`, { okLabel: 'Delete', danger: true })) return;
+          try { await App.api('/chemicals/' + id, { method: 'DELETE' }); App.toast('Chemical deleted.', 'ok'); App.navigate('#/register'); }
+          catch (err) { App.toast(err.message, 'error'); }
+        });
+      },
+    };
+
+    // ---- location modal
+    function locModal(l) {
+      const body = document.createElement('div');
+      body.innerHTML = `${inp('l_loc', 'Where is it kept?', l && l.location, 'required placeholder="For example: Workshop, flammables cabinet 1"')}
+        <div class="row2">${inp('l_qty', 'How much', l ? l.quantity : '', 'type="number" min="0" step="any" inputmode="decimal"')}${select('l_unit', 'Unit', [['L', 'Litres (L)'], ['kg', 'Kilograms (kg)']], l ? l.unit : 'L')}</div>
+        ${inp('l_note', 'Containers (optional)', l && l.container_note, 'placeholder="For example: 4 x 5 L drums"')}`;
+      App.modal({ title: l ? 'Edit storage location' : 'Add a storage location', body, buttons: [
+        { label: 'Cancel' },
+        { label: 'Save', kind: 'primary', onClick: async () => {
+          const loc = body.querySelector('#l_loc').value.trim();
+          if (!loc) { App.toast('Say where it is kept.', 'error'); return false; }
+          const payload = { location: loc, quantity: Number(body.querySelector('#l_qty').value) || 0, unit: body.querySelector('#l_unit').value, container_note: body.querySelector('#l_note').value.trim() };
+          if (l) await App.api('/locations/' + l.id, { method: 'PUT', body: payload });
+          else await App.api(`/chemicals/${id}/locations`, { method: 'POST', body: payload });
+          await reload('locs');
+        } },
+      ] });
+    }
+
+    // ---- SDS modal: attach / edit / replace
+    function sdsModal(mode) {
+      const s = d.sds || {};
+      const body = document.createElement('div');
+      const picks = new Set(String(s.pictograms || '').split(',').map((x) => x.trim()).filter(Boolean));
+      const maxMb = (App.settings && App.settings.upload_max_mb) || 15;
+      body.innerHTML = `
+        ${mode !== 'edit' ? `<label for="s_file">${mode === 'replace' ? 'The newer PDF (required)' : 'PDF file (optional)'}</label><input type="file" id="s_file" accept="application/pdf,.pdf"><p class="hint">PDF only, up to ${maxMb} MB.${mode === 'replace' ? ' The old version is kept in the history. The risk assessment is not changed, so check it against the new SDS.' : ''}</p>` : ''}
+        ${inp('s_title', 'Product name on the SDS', s.title)}
+        ${inp('s_sup', 'Supplier', s.supplier || d.chemical.supplier)}
+        <div class="row2">${inp('s_issue', 'Issue date', s.issue_date, 'type="date"')}${inp('s_rev', 'Revision', s.revision)}</div>
+        ${mode === 'edit' ? `${inp('s_due', 'Review due', s.review_due, 'type="date"')}<p class="hint">Leave this alone and it is worked out as the issue date plus 5 years.</p>` : ''}
+        ${inp('s_phone', 'Emergency phone', s.emergency_phone)}
+        <div class="row2">${select('s_signal', 'Signal word', [['', 'None'], ['Danger', 'Danger'], ['Warning', 'Warning']], s.signal_word)}${select('s_haz', 'SDS says it is', [['', 'Not recorded'], ['1', 'Hazardous'], ['0', 'Not hazardous']], s.hazardous == null ? '' : s.hazardous)}</div>
+        ${area('s_class', 'Hazard classification', s.hazard_classification)}
+        ${area('s_h', 'Hazard statements (H codes)', s.h_statements)}
+        ${area('s_p', 'Precautionary statements (P codes)', s.p_statements)}
+        <fieldset><legend>Hazard pictograms</legend><div class="checks">${App.PICTOGRAM_CODES.map((k) => `<label class="inline"><input type="checkbox" name="s_pic" value="${k}"${picks.has(k) ? ' checked' : ''}> ${App.pictogramSvg(k, 26)} ${esc(App.pictogramLabel(k))}</label>`).join('')}</div></fieldset>
+        <div class="row3">${inp('s_poison', 'Poison schedule', s.poison_schedule)}${inp('s_un', 'UN number', s.un_number)}${inp('s_dg', 'DG class', s.dg_class)}</div>
+        <div class="row3">${inp('s_sub', 'Subsidiary class', s.subsidiary_class)}${select('s_pg', 'Packing group', [['', 'None'], ['I', 'I'], ['II', 'II'], ['III', 'III']], s.packing_group)}${inp('s_hazchem', 'Hazchem code', s.hazchem_code)}</div>
+        ${inp('s_psn', 'Proper shipping name', s.proper_shipping_name)}
+        ${inp('s_cas', 'CAS numbers (separated by commas)', s.cas_numbers)}`;
+      const titles = { attach: 'Attach an SDS', edit: 'Edit SDS details', replace: 'Replace with a newer version' };
+      App.modal({ title: titles[mode], wide: true, body, buttons: [
+        { label: 'Cancel' },
+        { label: mode === 'replace' ? 'Replace SDS' : 'Save', kind: 'primary', onClick: async () => {
+          const q = (sel) => body.querySelector(sel);
+          const file = q('#s_file') && q('#s_file').files[0];
+          if (mode === 'replace' && !file) { App.toast('Choose the newer PDF first.', 'error'); return false; }
+          if (file) {
+            if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { App.toast('That file is not a PDF.', 'error'); return false; }
+            if (file.size > maxMb * 1024 * 1024) { App.toast(`That file is bigger than ${maxMb} MB.`, 'error'); return false; }
+          }
+          const data = {
+            title: q('#s_title').value.trim(), supplier: q('#s_sup').value.trim(), issue_date: q('#s_issue').value || null, revision: q('#s_rev').value.trim(),
+            emergency_phone: q('#s_phone').value.trim(), signal_word: q('#s_signal').value || null,
+            hazardous: q('#s_haz').value === '' ? null : Number(q('#s_haz').value),
+            hazard_classification: q('#s_class').value.trim(), h_statements: q('#s_h').value.trim(), p_statements: q('#s_p').value.trim(),
+            pictograms: [...body.querySelectorAll('input[name=s_pic]:checked')].map((x) => x.value).join(','),
+            poison_schedule: q('#s_poison').value.trim(), un_number: q('#s_un').value.replace(/\D/g, ''), dg_class: q('#s_dg').value.trim(),
+            subsidiary_class: q('#s_sub').value.trim(), packing_group: q('#s_pg').value || null, hazchem_code: q('#s_hazchem').value.trim(),
+            proper_shipping_name: q('#s_psn').value.trim(), cas_numbers: q('#s_cas').value.trim(),
+          };
+          if (mode === 'edit') {
+            const due = q('#s_due').value;
+            if (due !== (s.review_due || '')) data.review_due = due || null;
+            await App.api('/sds/' + s.id, { method: 'PUT', body: data });
+          } else {
+            const fd = new FormData();
+            if (file) fd.append('file', file);
+            fd.append('data', JSON.stringify(data));
+            if (mode === 'attach') {
+              fd.append('chemical_ids', JSON.stringify([Number(id)]));
+              const r = await App.api('/sds', { method: 'POST', body: fd });
+              const check = await App.api('/chemicals/' + id);
+              if (!check.sds || check.sds.id !== r.id) await App.api(`/chemicals/${id}/link-sds`, { method: 'POST', body: { sds_id: r.id } });
+            } else {
+              await App.api(`/sds/${s.id}/replace`, { method: 'POST', body: fd });
+            }
+          }
+          App.toast('SDS saved.', 'ok');
+          await reload('sds', 'assess', 'locs');
+        } },
+      ] });
+    }
+
+    drawTitle();
+    draw.details(); draw.sds(); draw.locs(); draw.danger();
+    await draw.assess();
+    const focus = params.query && params.query.focus;
+    const target = { details: '#cardDetails', sds: '#cardSds', assessment: '#cardAssess', locations: '#cardLocs' }[focus];
+    if (target) { const el = $(target); if (el) el.scrollIntoView({ block: 'start' }); }
+  }
+
+  App.views.register('chemical', {
+    title: 'Chemical',
+    async render(root, params) {
+      if (params.edit) return renderEdit(root, params.id, params);
+      return renderView(root, params.id);
+    },
+  });
+})();

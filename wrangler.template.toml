@@ -1,0 +1,29 @@
+# Copy this file to wrangler.toml (which is git-ignored) and fill in your own values.
+# Real resource names used by this project: D1 database "sds-ezy-db", R2 bucket "sds-ezy-files".
+name = "sds-ezy"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# Let the Worker handle /api/* itself; everything else is served as a static file
+run_worker_first = ["/api/*"]
+
+# Cloudflare Workers AI: the no-setup default for reading safety data sheets.
+# Remove this block if you only want to use your own Claude / OpenAI / Gemini key.
+[ai]
+binding = "AI"
+
+[vars]
+# Sender for the emailed login code (only used when RESEND_API_KEY is set).
+MAIL_FROM = "SDS EZY <onboarding@resend.dev>"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sds-ezy-db"
+database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "sds-ezy-files"

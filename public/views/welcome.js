@@ -1,0 +1,38 @@
+/* First-run welcome for the admin: the disclaimer, then setup guidance. */
+(function () {
+  const App = window.App;
+
+  App.views.register('welcome', {
+    title: 'Welcome',
+    adminOnly: true,
+    async render(root) {
+      root.innerHTML = `
+        <div class="topbar"><div><h1>Welcome to SDS EZY</h1><p class="sub">A chemical register with a risk assessment for every chemical, drafted from the safety data sheet.</p></div></div>
+        <section class="card">
+          <h2>Please read this first</h2>
+          ${App.disclaimerHtml()}
+          <p style="margin:0">SDS EZY helps you keep a register and prepare assessments. It does not replace your own judgement or the supplier's SDS.</p>
+        </section>
+        <section class="card">
+          <h2>Set up in six steps</h2>
+          <ol class="steps">
+            <li><strong>Your business details.</strong> Name, address and logo. They appear on every printed page. <a href="#/settings">Open Settings</a></li>
+            <li><strong>AI for reading SDSs (optional).</strong> Pick a provider and add a key, then press Test. Without it you can still upload SDSs, but you fill in each assessment by hand. <a href="#/settings">Open Settings</a></li>
+            <li><strong>Your people.</strong> Add a login for each person. A <em>user</em> can look at the register and upload an SDS. An <em>admin</em> can change things. <a href="#/users">Open Users</a></li>
+            <li><strong>The control and PPE lists.</strong> Check the tick-box lists the assessment uses and add your own. <a href="#/options">Open Options</a></li>
+            <li><strong>Add your chemicals.</strong> Upload an SDS and the chemical is added for you. If you already have a spreadsheet, import it. <a href="#/upload">Upload an SDS</a> or <a href="#/import">Import a spreadsheet</a></li>
+            <li><strong>Take it with you.</strong> The take-away screen makes a copy of the register and the SDS files you can keep on a phone or print. <a href="#/take-away">Open Take-away</a></li>
+          </ol>
+        </section>
+        <div class="actions"><button type="button" class="primary" id="startBtn">I have read this, set up my business</button><button type="button" id="skipBtn">Skip the setup for now</button></div>`;
+      root.querySelector('#startBtn').addEventListener('click', () => App.navigate('#/settings'));
+      root.querySelector('#skipBtn').addEventListener('click', async () => {
+        try {
+          await App.api('/settings', { method: 'PUT', body: { setup_complete: true } });
+          App.settings.setup_complete = true;
+          App.navigate('#/review');
+        } catch (err) { App.toast(err.message, 'error'); }
+      });
+    },
+  });
+})();

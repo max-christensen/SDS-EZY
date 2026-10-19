@@ -1,0 +1,21 @@
+# Local secrets (never commit these)
+.dev.vars
+.env
+
+# Project-specific config and local state, kept out of the repo
+wrangler.toml
+.wrangler/
+seed-local/
+CLAUDE.md
+.claude/
+
+node_modules/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log
+.mcp.json
+BRIEF.md
+wrangler.local.toml
+.claude-flow/
