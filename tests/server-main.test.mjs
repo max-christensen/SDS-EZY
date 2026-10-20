@@ -214,60 +214,6 @@ T("link / unlink SDS", async () => {
   assert.equal((await user.get(`/api/sds/${sdsA}`)).status, 200);
 });
 
-T("manifest: Schedule 11 totals by GHS class, OVER flags, spill compound, units, overrides", async () => {
-  const mk = async (name, cls, locs, extra = {}) => {
-    const c = await admin.post("/api/chemicals", { product_name: `${name} ${RUN}`, ghs_classification: cls, ...extra });
-    assert.equal(c.status, 201, JSON.stringify(c.data));
-    for (const l of locs) assert.equal((await admin.post(`/api/chemicals/${c.data.id}/locations`, l)).status, 201);
-    return c.data.id;
-  };
-  const before = (await user.get("/api/manifest")).data.totals;
-  const baseFlam2 = before.items.find(i => i.item === 7).total;
-  // 300 L of flammable liquid category 2 across two locations: over the placard quantity (250 L), not over the manifest quantity (1000 L)
-  const f2a = await mk("Flam2a", [{ c: "flam_liq", k: "2" }], [{ location: `Shed-${RUN}`, quantity: 200, unit: "L" }]);
-  await admin.post(`/api/chemicals/${f2a}/locations`, { location: `Yard-${RUN}`, quantity: 100, unit: "L" });
-  // category 4 in the same spill compound as a category 3 liquid is counted as category 3 (item 8)
-  const f3 = await mk("Flam3", [{ c: "flam_liq", k: "3" }], [{ location: `Cab-${RUN}`, spill_compound: `Bund-${RUN}`, quantity: 10, unit: "L" }]);
-  const f4 = await mk("Flam4", [{ c: "flam_liq", k: "4" }], [{ location: `Cab2-${RUN}`, spill_compound: `bund-${RUN}`, quantity: 20, unit: "L" }]);
-  // a kg quantity for an item that is given in litres is reported as an issue and not counted
-  const kgChem = await mk("Flam1kg", [{ c: "flam_liq", k: "1" }], [{ location: `Kg-${RUN}`, quantity: 50, unit: "kg" }]);
-  // classified hazardous but overridden to not hazardous: still in the totals (classification decides), absent from the rows
-  const ovr = await mk("OverrideNH", [{ c: "flam_liq", k: "3" }], [{ location: `Ov-${RUN}`, quantity: 7, unit: "L" }], { decision_override: "not_hazardous" });
-  // not classified: an issue, no items
-  const unc = await mk("Unclassified", undefined, [{ location: `Un-${RUN}`, quantity: 5, unit: "L" }]);
-  const m = await user.get("/api/manifest");
-  assert.equal(m.status, 200);
-  const items = Object.fromEntries(m.data.totals.items.map(i => [i.item, i]));
-  assert.equal(m.data.totals.items.length, 43);
-  assert.equal(items[7].total - baseFlam2, 300);
-  assert.equal(items[7].placardOver, true);
-  assert.equal(items[7].manifestOver, false);
-  const item8 = items[8];
-  assert.ok(item8.contributors.some(k => k.chemical_id === f4 && k.rule === "spill_compound"), "category 4 counted as category 3");
-  assert.ok(item8.contributors.some(k => k.chemical_id === ovr));
-  assert.ok(!items[10].contributors.some(k => k.chemical_id === f4));
-  assert.ok(items[6].contributors.some(k => k.chemical_id === kgChem && k.counted === false));
-  assert.ok(m.data.totals.issues.some(x => x.code === "unit_mismatch" && x.chemical_id === kgChem));
-  assert.ok(m.data.totals.issues.some(x => x.code === "no_classification" && x.chemical_id === unc));
-  assert.ok(m.data.totals.over.placard.includes(7));
-  const rowFor = (id) => m.data.rows.filter(r => r.chemical_id === id);
-  assert.equal(rowFor(f2a).length, 2);
-  assert.deepEqual(rowFor(f2a)[0].items, [7]);
-  assert.deepEqual(rowFor(f4)[0].items, [8]);
-  assert.equal(rowFor(ovr).length, 0);
-  assert.equal(rowFor(unc).length, 0);
-  assert.ok(rowFor(f3)[0].spill_compound.startsWith("Bund"));
-  assert.equal(rowFor(f2a)[0].pictograms, "GHS02");
-  const loc = rowFor(f2a)[0].location_id;
-  assert.equal((await admin.put(`/api/locations/${loc}`, { quantity: -1 })).status, 400);
-  assert.equal((await admin.put(`/api/locations/${loc}`, { unit: "gal" })).status, 400);
-  assert.equal((await admin.put(`/api/locations/${loc}`, { quantity: 1, spill_compound: "X" })).status, 200);
-  const got = (await user.get(`/api/chemicals/${f2a}`)).data.locations.find(l => l.id === loc);
-  assert.equal(got.spill_compound, "X");
-  assert.equal((await admin.del(`/api/locations/${loc}`)).status, 200);
-  for (const id of [f2a, f3, f4, kgChem, ovr, unc]) await admin.del(`/api/chemicals/${id}`);
-});
-
 T("classification: derives pictograms, signal word and decision; overrides; [] vs null", async () => {
   const c = await admin.post("/api/chemicals", { product_name: `Cls ${RUN}`, ghs_classification: [{ c: "flam_liq", k: "2" }, { c: "skin_corr", k: "1A" }] });
   const id = c.data.id;
@@ -323,8 +269,9 @@ T("classification: derives pictograms, signal word and decision; overrides; [] v
   const ex = e.chemicals.find(x => x.id === id);
   assert.deepEqual(ex.classification, [{ c: "acute_tox", k: "3", src: "admin" }]);
   assert.equal(ex.pictograms, "GHS06");
-  assert.equal(e.manifest_totals.items.length, 43);
-  assert.ok(e.locations.every(l => "spill_compound" in l));
+  assert.ok(Array.isArray(e.places) && Array.isArray(e.links) && Array.isArray(e.place_totals));
+  assert.equal(e.locations, undefined);
+  assert.equal(e.manifest_totals, undefined);
   await admin.del(`/api/chemicals/${id}`);
 });
 
@@ -358,7 +305,8 @@ T("import dry run, real import, skip duplicates", async () => {
   const dry = await admin.post("/api/import", { rows, dry_run: true });
   assert.equal(dry.status, 200, JSON.stringify(dry.data));
   assert.equal(dry.data.created, 2);
-  assert.equal(dry.data.locations_created, 2);
+  assert.equal(dry.data.links_created, 2);
+  assert.equal(typeof dry.data.places_created, "number");
   assert.equal(dry.data.errors.length, 2);
   assert.equal((await user.get(`/api/chemicals?q=${encodeURIComponent("imp a " + RUN)}`)).data.items.length, 0);
   const real = await admin.post("/api/import", { rows });
@@ -366,7 +314,8 @@ T("import dry run, real import, skip duplicates", async () => {
   const q = await user.get(`/api/chemicals?q=${encodeURIComponent("imp a " + RUN)}`);
   assert.equal(q.data.items.length, 1);
   const g = await user.get(`/api/chemicals/${q.data.items[0].id}`);
-  assert.equal(g.data.locations.length, 2);
+  assert.equal(g.data.places.length, 2);
+  assert.equal(g.data.locations, undefined);
   assert.equal(g.data.chemical.source, "import");
   const withDec = await admin.post("/api/import", { rows: [{ product_name: `Imp D ${RUN}`, decision: "hazardous", un_number: "1090", dg_class: "3", location: "L", quantity: 3, spill_compound: "SC" }] });
   assert.equal(withDec.data.created, 1, JSON.stringify(withDec.data));
@@ -377,7 +326,8 @@ T("import dry run, real import, skip duplicates", async () => {
   assert.equal(dg.chemical.decision_override, "hazardous");
   assert.equal(dg.chemical.decision_overridden, true);
   assert.equal(dg.sds.un_number, "1090");
-  assert.equal(dg.locations[0].spill_compound, "SC");
+  assert.equal(dg.places[0].spill_compound, "SC");
+  assert.equal(dg.places[0].place_type, "workshop");
   assert.equal(dg.chemical.pictograms, null);
   const again = await admin.post("/api/import", { rows: rows.slice(0, 3) });
   assert.equal(again.data.created, 0);
@@ -409,7 +359,7 @@ T("review list and export bundle", async () => {
   assert.equal(hit.review_due, "2023-01-01");
   const e = await user.get("/api/export/all");
   assert.equal(e.status, 200);
-  for (const k of ["chemicals", "locations", "assessments", "sds_files", "company"]) assert.ok(e.data[k] !== undefined);
+  for (const k of ["chemicals", "places", "links", "place_totals", "assessments", "sds_files", "company"]) assert.ok(e.data[k] !== undefined);
   assert.ok(e.data.assessments.every(a => Array.isArray(a.controls)));
 });
 
@@ -419,7 +369,8 @@ T("a user gets 403 on every admin write and can read everything", async () => {
     ["PUT", "/api/settings/ai", {}], ["POST", "/api/settings/ai/test"],
     ["POST", "/api/users", { name: "x", email: "x@x.co", password: "12345678", role: "admin" }], ["PUT", `/api/users/${userId}`, { role: "admin" }],
     ["POST", "/api/chemicals", { product_name: "x" }], ["PUT", `/api/chemicals/${chemA}`, { product_name: "x" }], ["DELETE", `/api/chemicals/${chemA}`],
-    ["POST", `/api/chemicals/${chemA}/locations`, { location: "x" }], ["PUT", "/api/locations/1", { quantity: 1 }], ["DELETE", "/api/locations/1"],
+    ["POST", "/api/places", { name: "x" }], ["PUT", "/api/places/1", { name: "y" }], ["POST", "/api/places/1/chemicals", { chemical_id: 1 }],
+    ["POST", `/api/chemicals/${chemA}/places`, { place_id: 1 }], ["PUT", "/api/chemical-places/1", { quantity: 1, unit: "L" }], ["DELETE", "/api/chemical-places/1"], ["DELETE", "/api/places/1"],
     ["POST", `/api/chemicals/${chemA}/link-sds`, { sds_id: sdsA }], ["POST", `/api/chemicals/${chemA}/unlink-sds`],
     ["POST", `/api/chemicals/${chemA}/assessments`, {}], ["PUT", `/api/assessments/${assessA}`, { risk_level: "uncertain" }], ["DELETE", `/api/assessments/${assessA}`],
     ["POST", "/api/sds", {}], ["PUT", `/api/sds/${sdsA}`, { title: "x" }], ["POST", `/api/sds/${sdsA}/replace`, {}], ["DELETE", `/api/sds/${sdsA}`],

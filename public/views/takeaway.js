@@ -21,27 +21,9 @@
     const s = document.createElement('style'); s.id = 'tk-css'; s.textContent = CSS; document.head.appendChild(s);
   }
 
-  const LIBS = ['/lib/export-model.js', '/lib/manifest-layout.js'];
+  const LIBS = ['/lib/export-model.js', '/lib/manifest-layout.js', '/lib/pdf-assets.js'];
   const stamp = () => new Date().toISOString().slice(0, 10);
   const D = () => window.DISCLAIMER || { short: '', full: '', points: [] };
-
-  // pdf-lib cannot embed GIF: decode it here and hand back a lossless PNG of the same pixel size (no resampling).
-  async function gifToPng(bytes) {
-    const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/gif' }));
-    const c = document.createElement('canvas');
-    c.width = bmp.width; c.height = bmp.height;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(bmp, 0, 0);
-    if (bmp.close) bmp.close();
-    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-    return new Uint8Array(await blob.arrayBuffer());
-  }
-  async function fetchBytes(url) {
-    const res = await fetch(url, { credentials: 'same-origin' });
-    return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
-  }
 
   async function fetchPdf(sdsId) {
     const res = await fetch('/api/sds/' + Number(sdsId) + '/file', { credentials: 'same-origin' });
@@ -62,9 +44,9 @@
       const company = Object.assign({}, model.company);
       if (!company.company_name) company.company_name = App.companyName();
       model.company = company;
-      // One rule: the server's totals if it sent them, otherwise computeSiteTotals here (same function).
-      const totals = raw.manifest_totals && raw.manifest_totals.items ? raw.manifest_totals : ref.computeSiteTotals(L.manifestLayout.entriesFromExport(raw));
-      const overList = L.manifestLayout.overBanners(L.manifestLayout.itemsModel(totals));
+      // One rule: the per-place totals the server sent (place_totals), otherwise computePlaceTotals here (the same function).
+      const sections = L.manifestLayout.sectionsFromExport(raw, ref);
+      const overList = L.manifestLayout.summaryLines(sections);
       const nChem = model.chemicals.length;
       const nHaz = model.chemicals.filter((c) => c.decision === 'hazardous').length;
       const sdsFiles = model.sdsFiles.filter((f) => f.has_file !== false && f.has_file !== 0);
@@ -74,7 +56,8 @@
       root.innerHTML = `<div class="topbar"><div><h1>Take-away copies</h1><p class="sub">Files you can keep on a phone, laptop or USB stick for places with no internet.</p></div></div>
         ${App.disclaimerHtml()}
         ${nChem === 0 ? '<div class="empty-state"><h2>The register is empty</h2><p>There is nothing to take away yet. Upload a safety data sheet first.</p><a class="btn primary" href="#/upload">Upload an SDS</a></div>' : `
-        ${overList.length ? `<div class="notice bad" role="alert"><strong>Over the placard or manifest quantity:</strong><ul style="margin:6px 0 0">${overList.map((b) => `<li>${App.esc(b.text)}</li>`).join('')}</ul></div>` : ''}
+        ${overList.over.length ? `<div class="notice bad" role="alert"><strong>Over the placard or manifest quantity:</strong><ul style="margin:6px 0 0">${overList.over.map((b) => `<li>${App.esc(b.text)}</li>`).join('')}</ul></div>` : ''}
+        ${overList.near.length ? `<div class="notice warn" role="status"><strong>Near the quantity (80% or more):</strong><ul style="margin:6px 0 0">${overList.near.map((b) => `<li>${App.esc(b.text)}</li>`).join('')}</ul></div>` : ''}
         <p class="muted">${nChem} chemical${nChem === 1 ? '' : 's'} (${nHaz} hazardous) and ${sdsFiles.length} safety data sheet PDF${sdsFiles.length === 1 ? '' : 's'}. Files are made on this device and are only as current as right now (${App.esc(App.fmtDate(model.generated_at))}).</p>
         <div class="tk-grid">
           <section class="tk-card"><h2>Spreadsheet</h2><p>One Excel file with the register, hazardous chemicals, manifest, all 43 placard and manifest items, things to check, assessments and the SDS review list.</p><button class="primary" type="button" data-act="xlsx">Download spreadsheet</button></section>
@@ -100,7 +83,7 @@
         await App.loadScript('/vendor/write-excel-file.min.js');
         await App.loadScript('/lib/xlsx-build.js');
         prog('Building the sheets...', 1, 2);
-        const sheets = L.xlsxBuild.buildSheets(model, D(), { ref, totals });
+        const sheets = L.xlsxBuild.buildSheets(model, D(), { ref, sections });
         const blob = await window.writeXlsxFile(sheets).toBlob();
         App.download('sds-ezy-register-' + stamp() + '.xlsx', blob);
         done('The spreadsheet has been downloaded.');
@@ -142,7 +125,7 @@
         await App.loadScript('/lib/pdf-bundle.js');
         const total = nChem;
         const out = await L.pdfBundle.buildBundle(window.PDFLib, model, {
-          D: D(), ref, totals, pictoDeps: { fetchBytes, toPng: gifToPng },
+          D: D(), ref, sections, pictoDeps: { fetchBytes: window.SDSLib.pdfAssets.fetchBytes, toPng: window.SDSLib.pdfAssets.gifToPng },
           cancelled: () => cancel,
           fetchSds: (id) => fetchPdf(id),
           onProgress: (label, i) => { prog(label + ' (' + i + ' of ' + total + ')', i, total); },

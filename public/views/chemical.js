@@ -132,8 +132,8 @@
 
   function printAssessment(d) {
     const c = d.chemical, a = d.assessment;
-    const locs = (d.locations || []).slice(0, 8);
-    const locHtml = locs.length ? `<p style="margin:8px 0 2px"><strong>Stored at:</strong> ${locs.map((l) => esc(l.location) + ' (' + fmtQty(l.quantity) + ' ' + esc(l.unit) + ')').join('; ')}</p>` : '';
+    const locs = (d.places || []).slice(0, 8);
+    const locHtml = locs.length ? `<p style="margin:8px 0 2px"><strong>Kept at:</strong> ${locs.map((l) => esc(l.name) + (l.registration ? ' ' + esc(l.registration) : '') + (l.quantity != null && l.unit ? ' (' + fmtQty(l.quantity) + ' ' + esc(l.unit) + ')' : '')).join('; ')}</p>` : '';
     App.print(`${App.printHeaderHtml()}<h1>Hazard risk assessment: ${esc(c.product_name)}</h1>
       <div class="print-sub">${esc(c.supplier || '')}${c.supplier ? ' · ' : ''}Printed ${esc(App.fmtDate(App.today()))}</div>
       ${hazardSummaryLine(d)}
@@ -143,7 +143,7 @@
   }
 
   // ------------------------------------------------------------ view screen
-  async function renderView(root, id) {
+  async function renderView(root, id, params) {
     root.innerHTML = App.loadingHtml('Loading chemical...');
     let d;
     try { d = await App.api('/chemicals/' + encodeURIComponent(id)); }
@@ -243,14 +243,15 @@
     }
     html += '</section>';
 
-    // Locations
-    const locs = d.locations || [];
-    html += `<section class="card"><div class="card-head"><h2>Where it is stored</h2>${admin ? `<a class="btn no-print" href="#/chemical/${c.id}/edit?focus=locations">Edit locations</a>` : ''}</div>`;
-    if (!locs.length) html += '<p class="muted" style="margin:0">No storage location recorded.</p>';
-    else html += `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Spill compound</th><th>Containers</th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Spill compound">${esc(l.spill_compound || '')}</td><td data-label="Containers">${esc(l.container_note || '')}</td></tr>`).join('')}</tbody></table>`;
+    // Where it is kept
+    const pls = d.places || [];
+    html += `<section class="card" id="placesCard"><div class="card-head"><h2>Where it is kept</h2>${admin ? `<a class="btn no-print" href="#/chemical/${c.id}/edit?focus=places">Change places</a>` : ''}</div>`;
+    if (!pls.length) html += '<p class="muted" style="margin:0">Not linked to any place yet.</p>';
+    else html += `<ul class="rowlist">${pls.map((l) => `<li><a class="item" href="#/place/${l.place_id}"><span><span class="name">${esc(l.name)}</span>${l.archived ? ' <span class="badge none">Archived</span>' : ''}<br><span class="sup">${esc(App.GHS.placeTypeLabel(l.place_type))}${l.registration ? ' &middot; ' + esc(l.registration) : ''}${l.quantity != null && l.unit ? ' &middot; ' + fmtQty(l.quantity) + ' ' + esc(l.unit) : ''}${l.container_note ? ' &middot; ' + esc(l.container_note) : ''}${l.spill_compound ? ' &middot; Spill compound: ' + esc(l.spill_compound) : ''}</span></span><span aria-hidden="true">&rsaquo;</span></a></li>`).join('')}</ul>`;
     html += '</section>';
 
     root.innerHTML = html;
+    if (params && params.query && params.query.to === 'assessment') { const ac = root.querySelector('#assessCard'); if (ac) ac.scrollIntoView({ block: 'start' }); }
 
     const pb = root.querySelector('#printBtn');
     if (pb) pb.addEventListener('click', () => printAssessment(d));
@@ -571,25 +572,26 @@
         });
       },
 
-      locs() {
-        const locs = d.locations || [];
-        $('#cardLocs').innerHTML = `<div class="card-head"><h2>Storage locations</h2><button type="button" class="primary" id="locAdd">Add a location</button></div>
-          ${locs.length ? `<table class="rtable"><thead><tr><th>Location</th><th>Quantity</th><th>Spill compound</th><th>Containers</th><th></th></tr></thead><tbody>${locs.map((l) => `<tr><td data-label="Location">${esc(l.location)}</td><td data-label="Quantity">${fmtQty(l.quantity)} ${esc(l.unit)}</td><td data-label="Spill compound">${esc(l.spill_compound || '')}</td><td data-label="Containers">${esc(l.container_note || '')}</td><td><button type="button" class="small" data-loc="${l.id}">Edit</button> <button type="button" class="small danger" data-locdel="${l.id}">Delete</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No storage location recorded yet.</p>'}`;
-        $('#locAdd').addEventListener('click', () => locModal(null));
+      places() {
+        const pls = d.places || [];
+        $('#cardLocs').innerHTML = `<div class="card-head"><h2>Where it is kept</h2><button type="button" class="primary" id="plAdd">Add a place</button></div>
+          ${pls.length ? `<ul class="rowlist">${pls.map((l) => `<li style="padding:8px 0"><div><strong>${esc(l.name)}</strong> <span class="muted small-text">${esc(App.GHS.placeTypeLabel(l.place_type))}${l.registration ? ' \u00b7 ' + esc(l.registration) : ''}${l.archived ? ' \u00b7 archived' : ''}</span></div><div class="small-text muted">${l.quantity != null && l.unit ? fmtQty(l.quantity) + ' ' + esc(l.unit) : 'No quantity'}${l.container_note ? ' \u00b7 ' + esc(l.container_note) : ''}${l.spill_compound ? ' \u00b7 Spill compound: ' + esc(l.spill_compound) : ''}</div><div class="actions" style="margin-top:6px"><button type="button" class="small" data-lk="${l.link_id}">Change</button><button type="button" class="small danger" data-lkdel="${l.link_id}">Remove</button></div></li>`).join('')}</ul>` : '<p class="muted">Not linked to any place yet.</p>'}`;
+        $('#plAdd').addEventListener('click', () => linkModal(null));
         $('#cardLocs').onclick = async (e) => {
-          const ed = e.target.closest('[data-loc]');
-          if (ed) { locModal(locs.find((l) => String(l.id) === ed.dataset.loc)); return; }
-          const dl = e.target.closest('[data-locdel]');
+          const ed = e.target.closest('[data-lk]');
+          if (ed) { linkModal(pls.find((l) => String(l.link_id) === ed.dataset.lk)); return; }
+          const dl = e.target.closest('[data-lkdel]');
           if (dl) {
-            if (!await App.confirm('Delete this storage location?', { okLabel: 'Delete', danger: true })) return;
-            try { await App.api('/locations/' + dl.dataset.locdel, { method: 'DELETE' }); await reload('locs'); }
+            if (!await App.confirm('Remove this chemical from that place?', { okLabel: 'Remove', danger: true })) return;
+            try { await App.api('/chemical-places/' + dl.dataset.lkdel, { method: 'DELETE' }); await reload('places'); }
             catch (err) { App.toast(err.message, 'error'); }
           }
         };
       },
 
+
       danger() {
-        $('#cardDanger').innerHTML = `<h2>Delete this chemical</h2><p class="muted">This removes the chemical, its storage locations and its assessments. The SDS and its PDF are removed too, unless another product uses them.</p><button type="button" class="danger" id="chemDel">Delete this chemical</button>`;
+        $('#cardDanger').innerHTML = `<h2>Delete this chemical</h2><p class="muted">This removes the chemical, its links to places and its assessments. The SDS and its PDF are removed too, unless another product uses them.</p><button type="button" class="danger" id="chemDel">Delete this chemical</button>`;
         $('#chemDel').addEventListener('click', async () => {
           if (!await App.confirm(`Delete "${d.chemical.product_name}" for good?`, { okLabel: 'Delete', danger: true })) return;
           try { await App.api('/chemicals/' + id, { method: 'DELETE' }); App.toast('Chemical deleted.', 'ok'); App.navigate('#/register'); }
@@ -599,25 +601,37 @@
     };
 
     // ---- location modal
-    function locModal(l) {
+    function linkModal(l) {
       const body = document.createElement('div');
-      body.innerHTML = `${inp('l_loc', 'Where is it kept?', l && l.location, 'required placeholder="For example: Workshop, flammables cabinet 1"')}
-        <div class="row2">${inp('l_qty', 'How much', l ? l.quantity : '', 'type="number" min="0" step="any" inputmode="decimal"')}${select('l_unit', 'Unit', [['L', 'Litres (L)'], ['kg', 'Kilograms (kg)']], l ? l.unit : 'L')}</div>
-        ${inp('l_note', 'Containers (optional)', l && l.container_note, 'placeholder="For example: 4 x 5 L drums"')}
-        ${inp('l_spill', 'Spill compound (optional)', l && l.spill_compound, 'placeholder="Leave blank to use the location"')}
-        <p class="hint">Locations that share the same spill compound text count as one spill area for the flammable liquid category 4 rule.</p>`;
-      App.modal({ title: l ? 'Edit storage location' : 'Add a storage location', body, buttons: [
+      body.innerHTML = '<p class="muted">Loading places...</p>';
+      const m = App.modal({ title: l ? 'Change ' + l.name : 'Add a place', body, buttons: [
         { label: 'Cancel' },
         { label: 'Save', kind: 'primary', onClick: async () => {
-          const loc = body.querySelector('#l_loc').value.trim();
-          if (!loc) { App.toast('Say where it is kept.', 'error'); return false; }
-          const payload = { location: loc, quantity: Number(body.querySelector('#l_qty').value) || 0, unit: body.querySelector('#l_unit').value, container_note: body.querySelector('#l_note').value.trim(), spill_compound: body.querySelector('#l_spill').value.trim() };
-          if (l) await App.api('/locations/' + l.id, { method: 'PUT', body: payload });
-          else await App.api(`/chemicals/${id}/locations`, { method: 'POST', body: payload });
-          await reload('locs');
+          const f = App.readLinkFields(body); if (!f) return false;
+          if (l) await App.api('/chemical-places/' + l.link_id, { method: 'PUT', body: f });
+          else {
+            const pid = body.querySelector('#lk_place') && body.querySelector('#lk_place').value;
+            if (!pid) { App.toast('Pick a place.', 'error'); return false; }
+            await App.api(`/chemicals/${id}/places`, { method: 'POST', body: Object.assign({ place_id: Number(pid) }, f) });
+          }
+          await reload('places');
         } },
       ] });
+      (async () => {
+        let pick = '';
+        if (!l) {
+          try {
+            const all = await App.api('/places?archived=0');
+            const have = new Set((d.places || []).map((x) => String(x.place_id)));
+            const avail = all.filter((p) => !have.has(String(p.id)));
+            pick = avail.length ? `<label for="lk_place">Place</label><select id="lk_place">${avail.map((p) => `<option value="${p.id}">${esc(p.name)}${p.registration ? ' (' + esc(p.registration) + ')' : ''} - ${esc(App.GHS.placeTypeLabel(p.place_type))}</option>`).join('')}</select>` : '<p class="muted">Every place already has this chemical, or there are no places yet. Add one under Places.</p>';
+          } catch (err) { pick = '<p class="muted">' + esc(err.message) + '</p>'; }
+        }
+        body.innerHTML = pick + App.linkFieldsHtml(l);
+      })();
+      return m;
     }
+
 
     // ---- SDS modal: attach / edit / replace
     function sdsModal(mode) {
@@ -676,16 +690,16 @@
             }
           }
           App.toast('SDS saved.', 'ok');
-          await reload('sds', 'assess', 'locs');
+          await reload('sds', 'assess', 'places');
         } },
       ] });
     }
 
     drawTitle();
-    draw.details(); draw.classification(); draw.sds(); draw.locs(); draw.danger();
+    draw.details(); draw.classification(); draw.sds(); draw.places(); draw.danger();
     await draw.assess();
     const focus = params.query && params.query.focus;
-    const target = { details: '#cardDetails', classification: '#cardClass', sds: '#cardSds', assessment: '#cardAssess', locations: '#cardLocs' }[focus];
+    const target = { details: '#cardDetails', classification: '#cardClass', sds: '#cardSds', assessment: '#cardAssess', locations: '#cardLocs', places: '#cardLocs' }[focus];
     if (target) { const el = $(target); if (el) el.scrollIntoView({ block: 'start' }); }
   }
 
@@ -693,7 +707,7 @@
     title: 'Chemical',
     async render(root, params) {
       if (params.edit) return renderEdit(root, params.id, params);
-      return renderView(root, params.id);
+      return renderView(root, params.id, params);
     },
   });
 })();

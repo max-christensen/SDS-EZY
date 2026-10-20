@@ -10,11 +10,14 @@
     "deploy": "npm run db:init && wrangler deploy",
     "db:init": "wrangler d1 execute DB --remote --yes --file=./schema.sql",
     "db:init:local": "wrangler d1 execute DB --local --file=./schema.sql",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "demo:build": "node scripts/make-demo.mjs",
     "demo:seed:local": "node scripts/seed-demo-local.mjs",
     "answer-key": "node scripts/answer-key.mjs",
-    "answer-key:selftest": "node scripts/answer-key.mjs --self-test"
+    "answer-key:selftest": "node scripts/answer-key.mjs --self-test",
+    "predeploy": "node scripts/bump-version.mjs",
+    "check:version": "node scripts/bump-version.mjs --check",
+    "make:icons": "node scripts/make-icons.mjs"
   },
   "devDependencies": {
     "fflate": "^0.8.3",

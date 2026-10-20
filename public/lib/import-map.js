@@ -9,7 +9,8 @@
   const FIELDS = [
     { key: "product_name", label: "Product name", required: true, aliases: ["product name", "product", "chemical name", "chemical", "name", "product description", "material", "item", "substance", "trade name"] },
     { key: "supplier", label: "Supplier", aliases: ["supplier", "manufacturer", "vendor", "brand", "company", "made by", "supplier name"] },
-    { key: "location", label: "Storage location", aliases: ["location", "storage location", "stored", "stored at", "where stored", "storage", "area", "cabinet", "store"] },
+    { key: "location", label: "Place (where it is kept)", aliases: ["location", "storage location", "place", "stored", "stored at", "where stored", "where kept", "storage", "area", "cabinet", "store", "vehicle", "site", "depot"] },
+    { key: "place_type", label: "Place type (workshop, vehicle or site)", aliases: ["place type", "type of place", "location type", "storage type", "kind of place"] },
     { key: "quantity", label: "Quantity", aliases: ["quantity", "qty", "amount", "volume", "max quantity", "quantity held", "total quantity", "stock", "capacity", "size"] },
     { key: "unit", label: "Unit (L or kg)", aliases: ["unit", "units", "uom", "unit of measure", "l kg", "litres kg"] },
     { key: "un_number", label: "UN number", aliases: ["un number", "un no", "un", "un id", "un code", "unno"] },
@@ -119,6 +120,16 @@
   }
   function round(n) { return Math.round(n * 1000) / 1000; }
 
+  // "Van", "Vehicle", "Ute" -> vehicle; "Site" -> site; "Workshop", "Depot", "Shed" -> workshop; anything else -> "".
+  function parsePlaceType(v) {
+    const t = norm(v);
+    if (!t) return "";
+    if (/(vehicle|van|ute|truck|car|trailer|vehicles)/.test(t)) return "vehicle";
+    if (/site/.test(t)) return "site";
+    if (/(workshop|depot|shed|store|yard|warehouse|shop|office)/.test(t)) return "workshop";
+    return "";
+  }
+
   function parseUnit(v) {
     const u = unitInfo(v);
     return u ? u.unit : null;
@@ -194,6 +205,10 @@
       out.product_name = text(get(r, "product_name"));
       out.supplier = text(get(r, "supplier"));
       out.location = text(get(r, "location"));
+      out.place = out.location; // the importer treats this as a PLACE (a workshop, vehicle or site)
+      const ptRaw = text(get(r, "place_type"));
+      out.place_type = parsePlaceType(ptRaw);
+      if (ptRaw && !out.place_type) problems.push({ level: "warn", text: "Place type \"" + ptRaw + "\" was not understood (use workshop, vehicle or site). It was left for the importer to decide." });
       out.use_description = text(get(r, "use_description"));
       const notes = [];
       if (text(get(r, "notes"))) notes.push(text(get(r, "notes")));
@@ -211,9 +226,6 @@
         out.unit = unitCell && !q.unit ? unitCell : q.unit || unitCell || defaultUnit;
         if (q.unit && unitCell && q.unit !== unitCell) out.unit = q.unit;
         if (q.note) out.container_note = q.note;
-      } else if (out.location) {
-        out.quantity = 0;
-        out.unit = unitCell || defaultUnit;
       }
 
       const un = text(get(r, "un_number"));
@@ -275,6 +287,6 @@
 
   return {
     FIELDS, FIELD_KEYS, detectHeaderRow, guessMapping, headerScore, buildRows, summarise, chunk,
-    parseQuantity, parseUnit, parseUn, parseClass, parsePg, parseDecision, parseDate,
+    parseQuantity, parseUnit, parsePlaceType, parseUn, parseClass, parsePg, parseDecision, parseDate,
   };
 });

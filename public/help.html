@@ -63,6 +63,10 @@
     <li><a href="#important">Important: please read</a></li>
     <li><a href="#login">Logging in</a></li>
     <li><a href="#roles">Who can do what</a></li>
+    <li><a href="#places">Places and vehicles</a></li>
+    <li><a href="#onsite">Finding the SDS and assessment on site</a></li>
+    <li><a href="#packs">Job packs</a></li>
+    <li><a href="#offline">Saving a place for offline</a></li>
     <li><a href="#review">The review list</a></li>
     <li><a href="#upload">Uploading an SDS</a></li>
     <li><a href="#register">The register</a></li>
@@ -108,6 +112,31 @@
   </tbody>
 </table>
 <p>A user cannot change anything, even something they uploaded themselves. Ask an admin.</p>
+
+<h2 id="places">Places and vehicles</h2>
+<p>A <strong>place</strong> is where chemicals are kept: a <em>workshop or depot</em>, a <em>vehicle</em> or a <em>site</em>. Vehicles can have a registration. Each chemical can be linked to one or more places, with an optional quantity (litres or kilograms), a note about the containers and an optional spill compound. Chemicals are not tracked moving between places.</p>
+<ul>
+  <li>On a phone, the bar at the bottom has <strong>My place</strong>, <strong>Find</strong>, <strong>Job pack</strong> and <strong>More</strong>. The top of the screen shows the company and your current place. Tap it to change place.</li>
+  <li><strong>Picking my place.</strong> Open <em>Places</em> and tap one. It is remembered on this phone for you only, so the next person to sign in on the same phone does not inherit it. After you sign in, the app opens your place.</li>
+  <li><strong>Admins</strong> can add, edit and archive places. An archived place drops off the lists and is not counted in totals, but keeps its links. <em>Show archived</em> brings it back into view.</li>
+  <li><strong>Counts toward totals.</strong> Placard and manifest quantities are added up for each place on its own, never across the whole business. A workshop or site counts by default. A vehicle does not.</li>
+  <li><strong>The vehicle note.</strong> A vehicle's page says: "Products in transit fall under the transport rules and are not counted here." That is our understanding. It has <strong>not</strong> been confirmed with Safe Work Australia or your WHS regulator, so check with them. An admin can switch counting on for a vehicle if they say otherwise.</li>
+</ul>
+
+<h2 id="onsite">Finding the SDS and assessment on site</h2>
+<p>Open your place. The chemicals kept there come first, each as a large card with its official pictograms, signal word, risk level and SDS review status. Each card has two big buttons: <strong>SDS</strong> opens the PDF in a new tab, and <strong>Assessment</strong> opens the chemical's risk assessment. If there is no SDS or no assessment on file, the button says so. Below the chemicals, the <strong>placard check</strong> shows how close the place is to the placard and manifest quantities, and it flags anything over. Scanning a place's <strong>QR label</strong> opens its chemical list.</p>
+
+<h2 id="packs">Job packs</h2>
+<p>Many clients ask for the SDS and risk assessments before work starts. <strong>Job pack</strong> builds them for you: choose a place (or tick chemicals), enter the client or site, a job reference and the date, and the app makes one print-ready PDF (cover page, register page, then each assessment and SDS) and a zip of the SDS files. Nothing is stored on the server. A chemical with no SDS or no assessment is named on the cover and is not left out.</p>
+
+<h2 id="offline">Saving a place for offline</h2>
+<p>On a place page, <strong>Save this place for offline</strong> keeps that place's chemicals, assessments and SDS PDFs on this phone. They then open with no signal. It shows when it was saved, how many chemicals and SDS files, and the size. <em>Update now</em> refreshes it, and <em>Remove from this phone</em> deletes it.</p>
+<ul>
+  <li><strong>Offline is read only.</strong> Anything that is not saved, and every change or upload, needs a signal. The app says "You're offline. This isn't saved on this phone."</li>
+  <li><strong>Signing out clears the saved data</strong> from the phone. A session that merely runs out does not.</li>
+  <li>After an app update you may see <em>Updated app: save this place again</em>.</li>
+  <li>To install the app on your home screen, use <em>More, Install app</em> (Android and desktop), or on an iPhone use Share, then Add to Home Screen.</li>
+</ul>
 
 <h2 id="review">The review list</h2>
 <p>This is the home screen. It shows what needs attention, with a count for each:</p>
@@ -170,7 +199,7 @@
   <li><strong>Classification</strong>: add or remove hazard classes and categories, or say "not classified yet" or "carries none of the classifications". A preview shows the decision, pictograms and signal word that follow. The decision and pictogram overrides are here, each with a <em>Reset to derived</em> button.</li>
   <li><strong>Safety data sheet</strong>: attach one, fix its details, or replace it with a newer version. Replacing keeps the old one in the history and moves every product that used it to the new one. Your assessment is not changed, so check it against the new SDS.</li>
   <li><strong>Risk assessment</strong>: fill in or correct every part. <em>Save changes</em> updates the current assessment. <em>Save as a new version</em> keeps the old one in the history.</li>
-  <li><strong>Storage locations</strong>: where it is kept and how much, in litres or kilograms. The optional <em>spill compound</em> groups locations that share a spill area (used by the flammable liquid category 4 rule).</li>
+  <li><strong>Where it is kept</strong>: link the chemical to places with an optional quantity, containers note and spill compound. The spill compound groups chemicals that share a spill area in one place (used by the flammable liquid category 4 rule).</li>
 </ul>
 <p>The tick boxes for controls and PPE come from <strong>Options</strong>, where you can add, rename, reorder and switch off choices.</p>
 
@@ -178,7 +207,7 @@
 <p>Each chemical has a <strong>QR label</strong> you can print and stick on the container or cabinet. Scanning it with a phone opens that chemical's page (after logging in).</p>
 
 <h2 id="manifest">The manifest</h2>
-<p>The manifest adds up the stock by GHS hazard class and category and compares each total with the placard and manifest quantities in Schedule 11 of the WHS Regulations. Use it to see if you are near a limit. Source of the reference data: Safe Work Australia.</p>
+<p>The manifest adds up the stock by GHS hazard class and category, place by place, and compares each total with the placard and manifest quantities in Schedule 11 of the WHS Regulations. Places that do not count (vehicles by default) are listed with the reason. Source of the reference data: Safe Work Australia.</p>
 
 <h2 id="takeaway">Take-away copies</h2>
 <p>The <strong>Take-away</strong> screen makes copies of the register that you can keep without logging in: spreadsheets, a PDF, and a zip with the SDS files. The disclaimer is included in each one. Make a new copy now and then, and keep it somewhere safe.</p>

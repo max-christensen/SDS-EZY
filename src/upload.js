@@ -5,6 +5,7 @@
 import { json, loadSettings, todayIso } from "./lib.js";
 import { getAiConfig, runExtraction, matchControlOptions, AI_DRAFT_LABEL } from "./ai.js";
 import { refreshChemicalSummary } from "./register.js";
+import { validatePlaceLink, linkChemicalToPlaceStatements } from "./places.js";
 import { derive } from "../public/lib/ghs-ref.mjs";
 
 function parseJsonList(v) { try { const x = JSON.parse(v); return Array.isArray(x) ? x : []; } catch { return []; } }
@@ -212,11 +213,21 @@ export async function handleUpload(request, env, user) {
     if (!Number.isInteger(replaceId) || replaceId < 1) return err("replace_sds_id is not valid.", 400);
   }
 
+  // Optional place the person is working from. Must exist and not be archived.
+  let placeId = null;
+  const rawPlace = form.get("place_id");
+  if (rawPlace !== null && rawPlace !== "") {
+    const n = Number(rawPlace);
+    if (!Number.isInteger(n) || n < 1) return err("That place is not valid.", 400);
+    try { placeId = (await validatePlaceLink(env, n)).id; }
+    catch (e) { return err(e && e.status === 400 && e.message ? e.message : "That place cannot be used.", 400); }
+  }
+
   // Store the PDF first; every later failure removes it again.
   const r2Key = `sds/${crypto.randomUUID()}.pdf`;
   await env.FILES.put(r2Key, buf, { httpMetadata: { contentType: "application/pdf" } });
   try {
-    return await processUpload(env, user, { settings, buf, r2Key, hash, fileName, text, answers, replaceId });
+    return await processUpload(env, user, { settings, buf, r2Key, hash, fileName, text, answers, replaceId, placeId });
   } catch (e) {
     try { await env.FILES.delete(r2Key); } catch { /* best effort */ }
     if (e && e.status && e.userMessage) return err(e.userMessage, e.status);
@@ -248,7 +259,7 @@ async function findTarget(env, replaceId, names, supplier) {
 }
 
 async function processUpload(env, user, ctx) {
-  const { settings, buf, r2Key, hash, fileName, text, answers, replaceId } = ctx;
+  const { settings, buf, r2Key, hash, fileName, text, answers, replaceId, placeId } = ctx;
   const db = env.DB;
   const today = todayIso();
   const { results: optRows } = await db.prepare("SELECT id, kind, label FROM control_options WHERE active = 1").all();
@@ -349,6 +360,13 @@ async function processUpload(env, user, ctx) {
       p.product_name, supplier, p.synonyms, p.product_codes, p.use_description, p.physical_form || (data && data.assessment.form) || null,
       eff.classification, eff.flags, eff.decision, eff.decision ? AI_DRAFT_LABEL : null, eff.decision ? decisionAt : null,
       ...ref.params, sdsF.issue_date || null, sdsF.review_due || null, risk, sdsF.dg_class || null, eff.signal_word, eff.pictograms, search, user.id);
+    if (placeId && i === newIdx[0]) { // must directly follow the chemical INSERT ("last")
+      const qty = answers.quantity_amount || undefined;
+      stm.push(...linkChemicalToPlaceStatements(env, {
+        chemicalId: "last", placeId, quantity: qty, unit: qty ? (answers.quantity_unit || "L") : undefined,
+        containerNote: answers.quantity_note ? answers.quantity_note.slice(0, 300) : undefined,
+      }));
+    }
   });
 
   // Assessments: AI draft for every product; or one blank one for the new chemical when there is no draft.
@@ -383,14 +401,18 @@ async function processUpload(env, user, ctx) {
       ...c.params, ...ref.params, today, user.name || null, answersJson, unverifiedJson, answers.use_where_how, user.id);
   }
 
-  // Storage location only when a quantity was given; it goes on the first new product so quantities are not counted twice.
-  if (answers.quantity_amount && newIdx.length) {
-    const c = chemRef(newIdx[0]);
-    P(`INSERT INTO storage_locations (chemical_id, location, quantity, unit, container_note) VALUES (${c.sql}, 'Not yet set (from upload)', ?, ?, ?)`,
-      ...c.params, answers.quantity_amount, answers.quantity_unit || "L", answers.quantity_note);
-    if (products.length > 1) warnings.push("The quantity was recorded against the first product only. Adjust the storage locations if needed.");
+  // Place link (never storage_locations). The first NEW chemical was linked above, with the optional quantity (first product only, so it is not counted twice).
+  // A new version also links the existing chemicals that are not linked to this place yet (never a duplicate).
+  if (placeId) {
+    if (target && oldChems.length) {
+      const { results: have } = await db.prepare("SELECT chemical_id FROM chemical_places WHERE place_id = ? LIMIT 5000").bind(placeId).all();
+      const linked = new Set((have || []).map(r => r.chemical_id));
+      for (const c of oldChems) if (!linked.has(c.id)) stm.push(...linkChemicalToPlaceStatements(env, { chemicalId: c.id, placeId }));
+    }
+    if (answers.quantity_amount && newIdx.length > 1) warnings.push("The quantity was recorded against the first product only. Adjust it on the place page if needed.");
+    else if (answers.quantity_amount && !newIdx.length) warnings.push("The quantity was not recorded because no new product was created. Add it on the place page if needed.");
   } else if (answers.quantity_amount) {
-    warnings.push("The quantity was not recorded because no new product was created. Add it to the storage locations if needed.");
+    warnings.push("No place was chosen, so the quantity was not recorded.");
   }
 
   await db.batch(stm); // all or nothing

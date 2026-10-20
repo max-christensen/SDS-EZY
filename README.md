@@ -6,6 +6,8 @@
 
 SDS EZY is a chemical register with a hazard risk assessment for each chemical. It makes a job nobody wants to do easy: someone uploads a safety data sheet (SDS), the app reads it, drafts the risk assessment and adds the lot to the register. It runs entirely on Cloudflare (a Worker for the code, D1 for the database, R2 for the PDFs), so there is no server to look after.
 
+It is built for people who work out on other people's sites as well as in a workshop: products are mostly kept in vehicles and come out at the point of use, and that is when the SDS and the risk assessment need to be at hand. It works best on a phone.
+
 It does one job: **the chemical register and the risk assessment for each chemical.** Work instructions, SOPs, JSEAs and SWMS are out of scope; they belong in a different product.
 
 ## Important: read this first
@@ -29,10 +31,14 @@ The app shows this on the register, the chemical and assessment pages, every pri
 - **If the AI isn't set up, or fails, the upload still works.** The entry is created with the PDF attached and an empty draft assessment for the admin to complete by hand.
 - **Review-due home screen.** SDS past or near their five-year review, chemicals with no SDS, chemicals with no decision.
 - **Classified from the Safe Work Australia poster.** Each chemical's GHS hazard classes and categories are read from SDS section 2 and checked against the hazard statements (H-codes) in the SDS text. The pictograms, the signal word and the hazardous or not hazardous decision are **derived from that classification** using a table built from the poster, with the nine official GHS pictograms. An admin can override a derived pictogram or decision, and an override is always shown. A product carrying none of the classifications is non-hazardous.
-- **Registers.** The full register, the hazardous chemicals register, and a manifest that totals stored quantities for each of the **43 placard and manifest items** in Schedule 11 of the WHS Regulations, shows each total against the placard quantity and the manifest quantity, and flags clearly when the site goes over either one. Quantities are worked out by GHS hazard class and category, not by dangerous goods class.
-- **A page for each chemical** with its SDS, its classification and the official GHS pictograms, the one-page assessment, storage locations and quantities (litres or kilograms), SDS version history, and a printable QR label for cabinets that opens the chemical's page after login.
+- **Registers.** The full register, the hazardous chemicals register, and a manifest. The manifest totals stored quantities for each of the **43 placard and manifest items** in Schedule 11 of the WHS Regulations **per place** (never across the whole business), shows each total against the placard quantity and the manifest quantity, and flags clearly when a place goes over either one (and when it is near). Quantities are worked out by GHS hazard class and category, not by dangerous goods class.
+- **A page for each chemical** with its SDS, its classification and the official GHS pictograms, the one-page assessment, the places it is kept with quantities (litres or kilograms), SDS version history, and a printable QR label for cabinets that opens the chemical's page after login.
 - **One SDS, many products.** A sheet that covers ten products (or four pack sizes) is stored once and linked to each product. A newer SDS replaces the current one and the old one is kept as history.
 - **Non-hazardous chemicals** that have been checked stay on the list with that decision recorded, and don't need a full assessment.
+- **Places.** A place is a workshop or depot, a vehicle (with a registration number) or a site. A chemical is kept at one or more places, with an optional quantity. The admin creates, edits and archives places; archived places drop off the active lists but stay on record. Chemicals are not tracked moving between places. Each place has a "counts toward the placard and manifest totals" setting: on for workshops, depots and sites, **off for vehicles** (see the open point below).
+- **Pick your place and go.** After signing in, a user picks where they are working (for example "Ute 2"). The app remembers it on that phone and shows that place's chemicals first, with the SDS and the assessment one tap away. Each place has a printable QR label that opens its chemical list after sign-in.
+- **Job packs.** Anyone signed in can pick a place (or tick chemicals directly), enter the client or site name, a job reference and the date, and get one print-ready PDF built in the browser: a cover page (company details, client or site, date, the list of chemicals and anything that is missing), a register page, then each chemical's assessment followed by its SDS, with the disclaimer on the pages. They can also get a zip of the SDS PDFs. A chemical with no SDS or no assessment is listed on the cover and gets a placeholder page, never left out. Nothing is saved on the server, so it needs no write permission. Many PCBUs ask for these before work starts.
+- **On the phone, with or without a signal.** The app can be installed to the home screen. "Save this place for offline" stores that place's chemical pages, assessments and SDS PDFs on the phone and shows when it was last updated, so they open with no signal. Offline is read-only; an upload needs a signal and says so. Signing out clears the saved data. See [docs/OFFLINE.md](docs/OFFLINE.md).
 - **Take-it-with-me exports for sites with no internet** (built in the browser, both roles): an Excel file of the register and manifest; one print-ready PDF of the whole register, the manifest, and each assessment followed by its SDS; and a zip of all the SDS PDFs named by product.
 - **One-time import** from a spreadsheet (admin).
 
@@ -44,8 +50,10 @@ There are only two roles, and the Worker enforces them (the screens just match):
 |---|---|---|
 | Search and read the register, open any SDS, read any assessment | yes | yes |
 | Print and export | yes | yes |
+| Pick my place, save a place for offline, build a job pack | yes | yes |
 | Upload an SDS | yes | yes (limited, see below) |
 | Edit or delete anything, including their own uploads | yes | no |
+| Create, edit and archive places; link chemicals to places and set quantities | yes | no |
 | Business details, branding, users, options, imports, settings, AI setup | yes | no |
 
 Because a user can write (by uploading), the upload has guards: PDF only (checked by content, not just the name), a file size cap (15 MB by default), a limit per login per hour (10 by default), and a duplicate check, so uploading an SDS that already exists is offered as a newer version of it and never makes a second copy. The admin can change the size cap and hourly limit in **Settings**.
@@ -55,6 +63,13 @@ Because a user can write (by uploading), the upload has guards: PDF only (checke
 The hazard classification table, the placard and manifest quantities (Items 1 to 43 of Schedule 11) and the pictogram descriptions come from material published by **[Safe Work Australia](https://www.safeworkaustralia.gov.au)**: the poster *Classification and labelling for workplace hazardous chemicals*, the table *Placard and manifest requirements under the model WHS Regulations*, and its *GHS pictograms for hazards* page. They are reproduced as reference data to help a business keep its register; the WHS Regulations, your regulator and the supplier's current SDS are the authority. [docs/REFERENCE.md](docs/REFERENCE.md) lists the sources and every place where the documents are unclear and we took the cautious reading rather than guess (a product in more than one item, kilograms against litres, spill compounds, and so on).
 
 The nine GHS pictogram images in `public/pictograms/` are used unchanged. Their origin and usage terms are not recorded in the files: **check the terms of the site they came from before publishing** (see docs/REFERENCE.md).
+
+### Open points to confirm with Safe Work Australia or your regulator
+
+Two things in the app are **our understanding, not something the Safe Work Australia documents state**, and must be confirmed before you rely on them (they are recorded in [docs/REFERENCE.md](docs/REFERENCE.md)):
+
+1. **Vehicles are not counted.** The app treats a vehicle as a place that does not count towards the placard and manifest totals, and says so on the vehicle's page and the manifest: "Products in transit fall under the transport rules and are not counted here." Whether that is right (for example when a vehicle is parked at a depot or a site) must be confirmed. An admin can switch counting on for a vehicle.
+2. **Totals are per place.** Each place that counts is treated as its own workplace. That reading must also be confirmed.
 
 ## What you need
 
@@ -97,7 +112,8 @@ The nine GHS pictogram images in `public/pictograms/` are used unchanged. Their 
 2. Enter your name, email and a password (8 or more characters). If you set a `SETUP_KEY` secret, the form also asks for it. This only works once; after the first admin exists it is disabled.
 3. You land on a short welcome page that shows the disclaimer, then on **Settings**: enter your company name, address, phone, email and ABN or other registration number, upload your logo and choose your colours. These show in the header, on the login screen and on printed pages.
 4. In **Users**, add the people who will upload or look things up. Give them the role **User** (read-only plus upload) or **Admin**.
-5. Upload your first SDS from **Upload SDS**, or bring your existing register in with **Import**.
+5. In **Places**, add your workshop or depot, your vehicles (with their registrations) and any regular sites. People then pick their place when they sign in.
+6. Upload your first SDS from **Upload SDS**, or bring your existing register in with **Import**.
 
 The in-app **Help** page explains each screen in plain language.
 
@@ -161,6 +177,8 @@ The app is then at http://localhost:8787. Local data, including uploaded PDFs, i
 
 **Workers AI is not simulated locally.** With the `[ai]` block in `wrangler.toml`, `wrangler dev` sends AI calls to Cloudflare's real service (and may be charged). To stay fully local, remove the `[ai]` block from your local config; uploads then use the no-AI draft path, or you can point `OPENAI_BASE_URL` at a local stand-in. The `.dev.vars` file is git-ignored; never commit it.
 
+The app installs a service worker (for the home-screen app and offline reading) that caches the app files. After editing files in `public/` while developing, unregister it in your browser's developer tools (Application, Service Workers) or the page may show old code. `npm run deploy` bumps the cached version automatically (`npm run predeploy`), so a new deploy replaces the old files on every phone.
+
 Run the tests with `npm test` (Node 22.13 or newer, because some use Node's built-in SQLite). Some of them talk to a running local server and skip themselves, with a message, if there isn't one (each file says how to start it).
 
 ## Updating
@@ -186,16 +204,21 @@ At the size SDS EZY is built for (a workshop or a small business, up to a few hu
 
 The D1 free limit that matters is rows read per day. Measured against a local database, as rows read per request (the sign-in figure is the second and later logins; the first also reads the settings):
 
-| Request | Demo data (66 chemicals, full assessments) | Synthetic 612 chemicals (no assessments) |
+| Request | Demo data (66 chemicals, 4 active places, full assessments) | Synthetic 600 chemicals (3 places, no assessments) |
 |---|---|---|
-| Sign in | 5 | 5 |
-| Review-due home screen | 16 | 374 |
-| Register (all chemicals) | 67 | 1,113 |
-| Hazardous register | 102 | 518 |
-| Search | 67 | about 610 |
-| A chemical page | 25 to 39 (a shared SDS lists its other products) | 7 |
-| Manifest (every stored quantity, totalled for the 43 items) | 225 | 1,756 |
-| Take-away export data (everything, once per export) | 2,582 | 7,429 |
+| Sign in | 2 to 5 | 2 |
+| Place picker (the list of places) | 6 | 4 |
+| A place page: 15 chemicals / 62 chemicals | 33 / 127 | 43 (20 chemicals) |
+| Job pack data: 17 chemicals / 30 chemicals | 513 / 887 | 137 (10) / 413 (30) |
+| Review-due home screen | 16 | 353 |
+| Register (all chemicals) | 67 | 1,101 |
+| Hazardous register | 102 | 516 |
+| Search | 67 | about 600 |
+| A chemical page | 26 | 9 |
+| Manifest (every place that counts, totalled for the 43 items) | 232 | 936 |
+| Take-away export data (everything, once per export) | 2,487 | 6,185 |
+
+A place page and a job pack read only the chemicals they name (by primary key), so they cost about the same however large the register is. A pack costs about 14 to 30 rows per chemical, because each one brings its SDS, its assessment and the assessment's controls. The place picker reads only the small places table, so it is cheap on every app start.
 
 If a daily limit is ever reached, the app shows errors until the limits reset at midnight UTC, and it does not start charging. Check the current limits on each provider's pricing page, including Cloudflare's for [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [D1](https://developers.cloudflare.com/d1/platform/pricing/) and [R2](https://developers.cloudflare.com/r2/pricing/).
 

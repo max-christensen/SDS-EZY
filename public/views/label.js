@@ -38,9 +38,57 @@
     const s = document.createElement('style'); s.id = 'lb-css'; s.textContent = CSS; document.head.appendChild(s);
   }
 
+  const TYPE_TEXT = { workshop: 'Workshop or depot', vehicle: 'Vehicle', site: 'Site' };
+  const isPlaceLabel = (params) => !!(params && (params.place || params.kind === 'place')) || /^#\/place\//.test(location.hash);
+
+  // Place label: QR to the place's chemical list, the place name, type, registration and the company.
+  async function renderPlace(root, params) {
+    css();
+    const id = Number(params.id);
+    root.innerHTML = App.loadingHtml('Preparing the label...');
+    await App.loadScript('/vendor/qrcode.js');
+    await App.loadScript('/lib/qr.js');
+    const d = await App.api('/places/' + id);
+    const pl = d.place;
+    const url = location.origin + '/#/place/' + id;
+    const qr = window.SDSLib.qr.qrSvg(window.qrcode, url, { label: 'QR code. Scan to open the chemical list for ' + pl.name + ' in SDS EZY', margin: 2 });
+    const typeText = TYPE_TEXT[pl.place_type] || pl.place_type || '';
+    let size = 'a6';
+    try { size = localStorage.getItem('sdsezy.labelSize') || 'a6'; } catch (e) { /* ignore */ }
+    if (!SIZES[size]) size = 'a6';
+
+    function labelHtml(key) {
+      const S = SIZES[key];
+      const reg = pl.registration ? `<span class="lb-dg">${App.esc(pl.registration)}</span>` : '';
+      const typ = `<div class="lb-sup">${App.esc(typeText)}</div>`;
+      if (key === 'a6') {
+        return `<div class="lb ${S.cls}"><div class="lb-co">${App.esc(App.companyName())}</div><div class="lb-name">${App.esc(pl.name)}</div>${typ}${reg}
+          <div class="lb-bottom"><div><div class="lb-qr" style="width:46mm">${qr}</div></div><div class="lb-scan" style="font-size:12pt;font-weight:700">Scan for the chemical list</div></div></div>`;
+      }
+      return `<div class="lb ${S.cls}"><div class="lb-main"><div class="lb-co">${App.esc(App.companyName())}</div><div class="lb-name">${App.esc(pl.name)}</div>${typ}${reg}</div><div><div class="lb-qr">${qr}</div><div class="lb-scan">Scan for the chemical list</div></div></div>`;
+    }
+
+    root.innerHTML = `<div class="topbar"><div><a class="crumb" href="#/place/${id}">&larr; ${App.esc(pl.name)}</a><h1>Place label</h1><p class="sub">Stick it in the vehicle, depot or site office. Scanning the code opens this place's chemical list (after signing in).</p></div></div>
+      <div class="card no-print"><div class="row2"><div><label for="lbSize">Label size</label><select id="lbSize">${Object.entries(SIZES).map(([k, v]) => `<option value="${k}"${k === size ? ' selected' : ''}>${v.name}</option>`).join('')}</select></div></div>
+      <div class="actions" style="margin-top:12px"><button type="button" class="primary" id="lbPrint">Print label</button></div>
+      <p class="hint">In the print window choose "Actual size" or 100%, and turn off headers and footers.</p></div>
+      <div class="lb-stage" id="lbStage" aria-label="Label preview"></div>`;
+    const stage = root.querySelector('#lbStage');
+    const draw = () => { stage.innerHTML = labelHtml(size); };
+    draw();
+    root.querySelector('#lbSize').addEventListener('change', (e) => { size = e.target.value; draw(); try { localStorage.setItem('sdsezy.labelSize', size); } catch (err) { /* ignore */ } });
+    root.querySelector('#lbPrint').addEventListener('click', () => {
+      document.getElementById('printArea').innerHTML = `<style>${CSS}</style>${labelHtml(size)}`;
+      document.getElementById('pageStyle').textContent = `@page { size: ${SIZES[size].page}; margin: 0; }`;
+      window.print();
+    });
+  }
+
+  App.views.register('placelabel', { title: 'Place label', render: (root, params) => renderPlace(root, params) });
   App.views.register('label', {
     title: 'Label',
     async render(root, params) {
+      if (isPlaceLabel(params)) return renderPlace(root, params);
       css();
       const id = Number(params.id);
       root.innerHTML = App.loadingHtml('Preparing the label...');

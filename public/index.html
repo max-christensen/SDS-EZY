@@ -2,9 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1F2A24">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="SDS EZY">
 <title>SDS EZY</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <link rel="stylesheet" href="app.css">
 <style id="pageStyle"></style>
 </head>
@@ -54,6 +61,7 @@
 
 <div id="app">
   <header class="app-header" id="appHeader"></header>
+  <div class="offline-banner" id="offlineBanner" role="status" hidden>Offline: showing what is saved on this phone</div>
   <div class="demo-banner" id="demoBanner" style="display:none">Demo mode: you can look around, but nothing can be changed or uploaded.</div>
   <div class="app-body">
     <nav class="sidebar" id="sidebar" aria-label="Main"></nav>
@@ -61,18 +69,21 @@
   </div>
 </div>
 
+<nav class="tabbar" id="tabbar" aria-label="Main tabs"></nav>
 <div id="printArea" aria-hidden="true"></div>
 <div id="toasts" aria-live="polite" role="status"></div>
 
 <script src="disclaimer.js"></script>
+<script src="/app-version.js"></script>
+<script src="/lib/offline.js"></script>
 <script src="app.js"></script>
 <script>
 // Load the screens in order. A file that is missing (or fails) is skipped and never stops the app.
 (function () {
   var files = [
     'views/pictograms.js', 'views/review.js', 'views/register.js', 'views/chemical.js', 'views/settings.js',
-    'views/users.js', 'views/options.js', 'views/welcome.js',
-    'views/upload.js', 'views/manifest.js', 'views/takeaway.js', 'views/import.js', 'views/label.js'
+    'views/users.js', 'views/options.js', 'views/welcome.js', 'views/places.js', 'views/place.js',
+    'views/pack.js', 'views/upload.js', 'views/manifest.js', 'views/takeaway.js', 'views/import.js', 'views/label.js'
   ];
   function load(src) {
     return new Promise(function (resolve) {

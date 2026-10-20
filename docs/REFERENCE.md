@@ -56,3 +56,12 @@ confirm. If you disagree with one, the rule is in one place (`computeSiteTotals`
     "category not confirmed", the placard item is worked out from the AI's category and flagged, and the signal word uses the most severe category if no category is known.
 11. **Hazard statements outside the poster** (for example the H400 series for aquatic toxicity, EUH codes) are ignored for classification.
 12. **ADG class.** Kept as a separate SDS field (UN number, ADG class, packing group, Hazchem, proper shipping name come from SDS section 14) and shown "for illustration only". Nothing is derived from it.
+
+## Open points (not yet confirmed; do not rely on them)
+
+1. **Vehicles are not counted towards the placard and manifest totals.** SDS EZY treats a vehicle as a place whose "counts toward totals" setting is OFF by default, and says on the vehicle's page and the
+   manifest: "Products in transit fall under the transport rules and are not counted here." That is the project owner's understanding, **not** something the two Safe Work Australia documents state. It **must be confirmed
+   with Safe Work Australia or the WHS regulator** (for example: when a vehicle is parked at a depot or a site, or when product is left in it overnight, does it count?). Until then it is a default an admin can change per place.
+2. **Totals are worked out per place, not across the whole business.** The Safe Work Australia table talks about quantities at a "workplace". Treating each place that counts (workshop, depot, site) as its own workplace is our reading;
+   please confirm it with the regulator, especially for places close together or sharing a spill compound.
+3. **"Near" a quantity (80%).** The screens call a total "near" a placard or manifest quantity from 80%. That is a reading aid of ours, not part of Schedule 11.

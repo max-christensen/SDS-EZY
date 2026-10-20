@@ -33,24 +33,48 @@ emailed code. In the demo Worker (`DEMO_MODE=1`) every write is blocked for both
   (cartridges and a pail), Kestrel acrylic paints by 3, Kestrel oil stain by 2.
 * **SDS version history**: Marlow Methylated Spirits, v1 (replaced) and v2 (current); the chemical page shows the history and an older assessment.
 * **Review status**: 5 past the five-year review date (overdue), 4 due within 90 days, 55 in date, 1 SDS with no issue date (unknown), 1 chemical with no SDS.
-* **Risk levels** (current assessment): 25 not significant, 33 significant but controlled, 4 significant and not controlled, 4 uncertain (1 chemical has a blank assessment, 1 has no SDS).
-* **Storage**: 75 locations in L and kg, nine of them with a named spill compound. Totals are by GHS class and category (Schedule 11 items), not by ADG class.
-* Each PDF is 11 to 13 KB, has 16 numbered sections, and uses standard fonts with real text, so it can be read by the AI reading step too.
+* **Risk levels** (current assessment): 25 not significant, 33 significant but controlled, 4 significant and not controlled, 3 uncertain (one is a blank assessment, one has no SDS), plus 1 chemical with no assessment at all (the soldering flux).
+* **Places** (5, ids fixed so links stay valid after seeding) and **108 chemical links** (`chemical_places`; `places.chemical_count` matches the links; the legacy `storage_locations` table is not written):
 
-### Expected site totals (asserted in `tests/demo-data.test.mjs` with `computeSiteTotals`)
+  | id | Place | Type | Counts toward totals | Chemicals | Notes |
+  |---|---|---|---|---|---|
+  | 1 | Tallowood workshop | workshop | yes | 62 | gas cage, fuel cube, flammables cabinets, paint, maintenance, cleaners, plaster and yard stock |
+  | 2 | Harbour Road job site | site | yes | 11 | heaters, cutting kit, aerosols, a few finishing products |
+  | 3 | Ute 1 (rego TWD 001) | vehicle | no | 15 | painting and finishing kit |
+  | 4 | Ute 2 (rego TWD 002) | vehicle | no | 17 | maintenance, cleaning and aerosol kit |
+  | 5 | Ute 3 (sold) (rego TWD 003) | vehicle, **archived** | no | 3 | keeps its links on record, is not totalled |
 
-| Item | Total | Placard | Manifest | Status |
-|---|---|---|---|---|
-| 1 Flammable gases | 250 L | 200 | 5000 | **OVER placard** (2 x 45 kg LPG heater cylinders 210 L + acetylene 40 L) |
-| 9 Flammable liquids, any mix of items 6 to 8 | 1074.6 L | 1000 | 10000 | **OVER placard through the mix only**: item 6 = 45 L (limit 50), item 7 = 64 L (limit 250), item 8 = 965.6 L (limit 1000), none over on its own (a 1000 L diesel fuel cube holds 800 L) |
-| 8 Flammable liquids cat 3 | 965.6 L | 1000 | 10000 | under; includes the 20 L of category 4 decking oil that shares the "Paint store bund" spill compound with the stains and varnish (counted as category 3) |
-| 10 Flammable liquids cat 4 | 10 L | 10000 | 100000 | the second decking-oil tin, kept in its own location |
-| 4 Gases under pressure (other) | 100 L | 1000 | 10000 | under |
-| 38 Skin corrosion 1B | 40.7 | 250 | 2500 | under; other items (5, 25, 28, 37, 40, 41) are all well under |
+  Every chemical is kept in at least one place (35 are in two or more). Some links have no quantity (hand cleaner in both utes, glass cleaner in Ute 2, the plaster patch compound on site). Quantities are in L and kg; a link with a quantity always has a unit.
+  Spill compounds are named on the flammable-liquid links (Cabinet 1 sump, Cabinet 2 sump, Paint store bund, Fuel cube bund, Generator shed, Maintenance store, Site generator, Decking area).
 
-* **No item is over its manifest quantity.** Those quantities start at 2500 L or more for anything the site holds, which a small joinery cannot realistically reach without breaking the rest of the story.
-* **Unit mismatch**: the 9 kg LPG cylinder in the van is recorded in kg; item 1 is in litres, so it is not counted and appears as an issue.
-* **Other issues expected**: 5 x "acute toxicity category 4 has no item for liquids and solids", 1 x "no classification" (the two-stroke mix, 5 L), and 6 products that count towards more than one item.
+### Expected per-place totals (asserted in `tests/demo-data.test.mjs` with `computePlaceTotals`)
+
+Totals are per place, never across the business. Vehicles and the archived place count nothing (they show the transport note, which is the project owner's unconfirmed understanding).
+
+| Place | Item | Total | Placard | Manifest | Status |
+|---|---|---|---|---|---|
+| Tallowood workshop | 8 Flammable liquids cat 3 | 854.6 L | 1000 | 10000 | **NEAR** the placard quantity (85%); includes the 20 L of category 4 decking oil that shares the "Paint store bund" compound with the stains and varnish (counted as category 3), and 760 L of diesel (700 L in the fuel cube + 60 L cans) |
+| Tallowood workshop | 9 Flammable liquids, any mix of items 6 to 8 | 943.6 L | 1000 | 10000 | **NEAR** (94%); item 6 = 30 L (limit 50), item 7 = 59 L (limit 250), item 8 as above, none over on its own |
+| Tallowood workshop | 1 Flammable gases | 145 L | 200 | 5000 | under (45 kg LPG cylinder about 105 L + acetylene 40 L) |
+| Tallowood workshop | 4, 5, 25, 28, 37, 38, 40, 41 | | | | all well under |
+| Harbour Road job site | 1 Flammable gases | 210 L | 200 | 5000 | **OVER the placard quantity** (2 x 45 kg LPG heater cylinders) |
+| Harbour Road job site | 10 Flammable liquids cat 4 | 10 L | 10000 | 100000 | decking oil in its own tray ("Decking area"), so it is not counted as category 1 with the petrol |
+| Harbour Road job site | 6 / 8 / 9 / 5 | 20 / 4 / 24 / 3 | | | well under |
+
+* **Vehicles matter**: Ute 1 and Ute 2 together hold about 152 L of category 3 flammable liquid (120 L of diesel cans in Ute 2). If their stock were added to the workshop, item 8 would reach 1006.6 L and go OVER its placard quantity. The test checks this. Because vehicles do not count, the workshop stays "near".
+* **No place is over a manifest quantity** (those start at 2500 L for anything this business holds, which a small joinery cannot realistically reach without breaking the rest of the story).
+* **Unit mismatch** (job site): the 12 x 400 g spray enamel cans are recorded as 4.8 kg; item 5 (aerosols) is in litres, so that quantity is not counted and appears as an issue.
+* **Other issues**: in the workshop, acute toxicity category 4 liquids have no item (counted as issues), 1 "no classification" (the two-stroke fuel mix, 5 L), and products that count towards more than one item; the job site has 1 acute toxicity category 4 notice.
+
+### Sample job pack
+
+Open (after signing in as either demo login): `#/pack?place=4&client=Smith%20Street%20Primary%20School&ref=JOB-1042&date=2026-10-19`
+(`make-demo` writes the exact link, with the build date, to `demo-out/summary.json` as `sample_pack`). It builds a pack from **Ute 2** (id 4, 17 chemicals: aerosols, adhesives, cleaning products, petrol, diesel cans, rust converter and so on).
+It is built to show the "missing" wording:
+
+* **No SDS on file**: "Concrete Sealer (solvent-based, unlabelled tin)" (chemical id 66). It is classified by an admin from the can, and has an assessment.
+* **No assessment on file**: "Wattlebird Soldering Flux Paste" (chemical id 38). It has an SDS but no assessment row at all.
+* Everything else in Ute 2 has an SDS and an assessment; two of its SDS are past their review date (brake cleaner and the neutral cure silicone sealant) so the review badge is also visible.
 
 Issue dates are computed from the build date (`--today`), so the overdue/due-soon counts do not drift as time passes.
 

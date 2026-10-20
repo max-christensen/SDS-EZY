@@ -24,7 +24,7 @@
 //   applyClassification(env, chemicalId, classification, {flags, decisionBy, overrides})
 //        reads the chemical's current values for anything you leave undefined, then runs classificationStatements.
 //   cleanOverrides(b), cleanClassificationInput(v, {strict})   validation helpers for request bodies
-//   createChemical(env, fields, userId) -> id
+//   createChemical(env, fields, userId) -> id   (fields.place = {place_id, quantity, unit, container_note, spill_compound} also links it to a place)
 //        fields: product_name (required), supplier, synonyms, product_codes, use_description, physical_form, decision,
 //        decision_note, decision_by, sds_id (must be a current SDS), source ('upload'|'manual'|'import'|'demo'),
 //        ghs_classification (array or null), classification_flags (array), decision_override, pictograms_override.
@@ -39,8 +39,9 @@
 //   cleanAssessment(fields, {create, allowMeta})  validation used by createAssessment and assessments.js
 
 import { json, loadSettings, todayIso, daysBetweenIso } from "./lib.js";
+import { linkChemicalToPlaceStatements, validatePlaceLink } from "./places.js";
 import {
-  effective, normaliseClassification, parsePictogramList, PICTOGRAM_CODES, itemsForClassification, computeSiteTotals,
+  effective, normaliseClassification, parsePictogramList, PICTOGRAM_CODES, computePlaceTotals,
 } from "../public/lib/ghs-ref.mjs";
 import { deleteSdsDocument } from "./sds.js";
 
@@ -239,7 +240,7 @@ export function cleanClassificationInput(v, { strict = true } = {}) {
   return list;
 }
 
-function parseJson(text, dflt) {
+export function parseJson(text, dflt) {
   if (!text) return dflt;
   try { return JSON.parse(text); } catch { return dflt; }
 }
@@ -312,6 +313,14 @@ export async function createChemical(env, fields, userId) {
     overrides: { decision: ov.decision_override ?? null, pictograms: ov.pictograms_override ?? null }, decisionBy,
   }));
   if (sdsId) stmts.push(...summaryStatements(env, { chemicalId: "last" }));
+  // Optional first place: fields.place = {place_id, quantity, unit, container_note, spill_compound} (must come last: uses last_insert_rowid).
+  if (fields.place && fields.place.place_id) {
+    await validatePlaceLink(env, fields.place.place_id);
+    stmts.push(...linkChemicalToPlaceStatements(env, {
+      chemicalId: "last", placeId: fields.place.place_id, quantity: fields.place.quantity, unit: fields.place.unit,
+      containerNote: fields.place.container_note, spillCompound: fields.place.spill_compound,
+    }));
+  }
   const res = await env.DB.batch(stmts);
   return res[0].meta.last_row_id;
 }
@@ -414,7 +423,7 @@ export async function createAssessment(env, chemicalId, fields, controlOptionIds
 
 // ---------------------------------------------------------------- handlers: review
 
-const CHEM_PUBLIC_COLS = `id, product_name, supplier, synonyms, product_codes, use_description, physical_form, decision, decision_note,
+export const CHEM_PUBLIC_COLS = `id, product_name, supplier, synonyms, product_codes, use_description, physical_form, decision, decision_note,
   decision_by, decision_at, ghs_classification, classification_flags, decision_override, pictograms_override,
   sds_id, sds_issue_date, review_due, risk_level, dg_class, signal_word, pictograms, source,
   created_by, created_at, updated_at`;
@@ -530,7 +539,7 @@ const SDS_PUBLIC = `s.id, s.doc_key, s.version_no, s.is_current, s.title, s.supp
 export { SDS_PUBLIC };
 
 // Replaces the raw JSON columns with the parsed classification and adds the derived / overridden information.
-function decorateChemical(chem) {
+export function decorateChemical(chem) {
   const cls = parseJson(chem.ghs_classification, null);
   const eff = effective(cls, { decision: chem.decision_override, pictograms: overrideTextToValue(chem.pictograms_override) });
   delete chem.ghs_classification;
@@ -550,7 +559,7 @@ export async function handleGetChemical(c) {
   if (!chem) throw new ApiError(404, "Chemical not found");
   const stmts = [
     env.DB.prepare("SELECT id, assessed_date, sds_date, form, use_description, route_inhalation, route_ingestion, route_absorption, fire_response, spill_response, controls_notes, ppe_notes, risk_level, monitoring_needed, monitoring_note, surveillance_needed, surveillance_note, assessed_by, source, unverified, sds_id, chemical_id, is_current, created_at, updated_at FROM assessments WHERE chemical_id = ? AND is_current = 1 ORDER BY id DESC LIMIT 1").bind(id),
-    env.DB.prepare("SELECT id, location, spill_compound, quantity, unit, container_note FROM storage_locations WHERE chemical_id = ? ORDER BY id").bind(id),
+    env.DB.prepare("SELECT cp.id AS link_id, cp.place_id, p.name, p.place_type, p.registration, p.archived, p.counts_toward_totals, cp.quantity, cp.unit, cp.container_note, cp.spill_compound FROM chemical_places cp JOIN places p ON p.id = cp.place_id WHERE cp.chemical_id = ? ORDER BY p.name COLLATE NOCASE, cp.id").bind(id),
   ];
   if (chem.sds_id) {
     stmts.push(env.DB.prepare(`SELECT ${SDS_PUBLIC} FROM sds s WHERE s.id = ?`).bind(chem.sds_id));
@@ -576,7 +585,7 @@ export async function handleGetChemical(c) {
   }
   chem.review_status = reviewStatus(chem.review_due, chem.sds_id, today);
   decorateChemical(chem);
-  return json({ chemical: chem, sds, sds_products: sdsProducts, sds_products_total: sdsProductsTotal, assessment, locations: res[1].results });
+  return json({ chemical: chem, sds, sds_products: sdsProducts, sds_products_total: sdsProductsTotal, assessment, places: res[1].results });
 }
 
 export async function handleHistory(c) {
@@ -655,7 +664,8 @@ export async function handleDeleteChemical(c) {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM assessment_controls WHERE assessment_id IN (SELECT id FROM assessments WHERE chemical_id = ?)").bind(id),
     env.DB.prepare("DELETE FROM assessments WHERE chemical_id = ?").bind(id),
-    env.DB.prepare("DELETE FROM storage_locations WHERE chemical_id = ?").bind(id),
+    env.DB.prepare("UPDATE places SET chemical_count = MAX(chemical_count - 1, 0) WHERE id IN (SELECT place_id FROM chemical_places WHERE chemical_id = ?)").bind(id),
+    env.DB.prepare("DELETE FROM chemical_places WHERE chemical_id = ?").bind(id),
     env.DB.prepare("DELETE FROM chemicals WHERE id = ?").bind(id),
   ]);
   let sdsDeleted = false;
@@ -666,96 +676,12 @@ export async function handleDeleteChemical(c) {
   return json({ ok: true, sds_deleted: sdsDeleted });
 }
 
-// ---------------------------------------------------------------- handlers: storage locations
-
-function cleanLocation(b, { create }) {
-  const out = {};
-  if (b.location !== undefined || create) out.location = cleanStr(b.location, 200, "Location", { required: true });
-  if (b.quantity !== undefined || create) {
-    const q = b.quantity === undefined || b.quantity === null || b.quantity === "" ? 0 : Number(b.quantity);
-    if (!Number.isFinite(q) || q < 0 || q > 1e9) throw bad("Quantity must be a number from 0 up");
-    out.quantity = Math.round(q * 1000) / 1000;
-  }
-  if (b.unit !== undefined || create) {
-    const u = b.unit === undefined || b.unit === null || b.unit === "" ? "L" : b.unit;
-    if (!UNITS.includes(u)) throw bad("Unit must be L or kg");
-    out.unit = u;
-  }
-  if (b.container_note !== undefined) out.container_note = cleanStr(b.container_note, 300, "Container note");
-  if (b.spill_compound !== undefined) out.spill_compound = cleanStr(b.spill_compound, 200, "Spill compound");
-  return out;
-}
-
-export async function handleAddLocation(c) {
-  const { env } = c;
-  const chemId = cleanId(c.p[0], "Chemical");
-  const f = cleanLocation(await readJson(c.request), { create: true });
-  const chem = await env.DB.prepare("SELECT id FROM chemicals WHERE id = ?").bind(chemId).first();
-  if (!chem) throw new ApiError(404, "Chemical not found");
-  const r = await env.DB.prepare(
-    "INSERT INTO storage_locations (chemical_id, location, spill_compound, quantity, unit, container_note) VALUES (?, ?, ?, ?, ?, ?)"
-  ).bind(chemId, f.location, f.spill_compound ?? null, f.quantity, f.unit, f.container_note ?? null).run();
-  return json({ id: r.meta.last_row_id }, 201);
-}
-
-export async function handleUpdateLocation(c) {
-  const { env } = c;
-  const id = cleanId(c.p[0], "Location");
-  const f = cleanLocation(await readJson(c.request), { create: false });
-  const keys = Object.keys(f);
-  if (!keys.length) throw bad("Nothing to update");
-  const r = await env.DB.prepare(`UPDATE storage_locations SET ${keys.map(k => `${k} = ?`).join(", ")} WHERE id = ?`)
-    .bind(...keys.map(k => f[k]), id).run();
-  if (!r.meta.changes) throw new ApiError(404, "Location not found");
-  return json({ ok: true });
-}
-
-export async function handleDeleteLocation(c) {
-  const id = cleanId(c.p[0], "Location");
-  const r = await c.env.DB.prepare("DELETE FROM storage_locations WHERE id = ?").bind(id).run();
-  if (!r.meta.changes) throw new ApiError(404, "Location not found");
-  return json({ ok: true });
-}
-
-// ---------------------------------------------------------------- handlers: manifest and export
-
-// One entry per storage location with a quantity, for computeSiteTotals (classification decides, not the decision).
-function siteEntry(r) {
-  return {
-    id: r.location_id ?? r.id, chemical_id: r.chemical_id, name: r.product_name, classification: parseJson(r.ghs_classification, null),
-    quantity: r.quantity, unit: r.unit, location: r.location, spill_compound: r.spill_compound,
-  };
-}
-
-export async function handleManifest(c) {
-  const { env } = c;
-  const { results } = await env.DB.prepare(
-    `SELECT l.id AS location_id, c.id AS chemical_id, c.product_name, c.supplier, c.decision, c.ghs_classification, c.signal_word, c.pictograms,
-            l.location, l.spill_compound, l.quantity, l.unit, l.container_note,
-            s.dg_class, s.subsidiary_class, s.un_number, s.packing_group, s.hazchem_code, s.proper_shipping_name
-     FROM storage_locations l JOIN chemicals c ON c.id = l.chemical_id LEFT JOIN sds s ON s.id = c.sds_id`
-  ).all();
-  const totals = computeSiteTotals(results.filter(r => r.quantity > 0).map(siteEntry));
-  const itemsByLocation = new Map();
-  for (const t of totals.items) for (const k of t.contributors) {
-    if (!k.counted || k.location_id == null) continue;
-    const set = itemsByLocation.get(k.location_id) || new Set();
-    set.add(t.item); itemsByLocation.set(k.location_id, set);
-  }
-  const rows = results.filter(r => r.decision === "hazardous").map(r => ({
-    location_id: r.location_id, chemical_id: r.chemical_id, product_name: r.product_name, supplier: r.supplier, location: r.location,
-    spill_compound: r.spill_compound, quantity: r.quantity, unit: r.unit, container_note: r.container_note,
-    classification: parseJson(r.ghs_classification, null), items: [...(itemsByLocation.get(r.location_id) || [])].sort((a, b) => a - b),
-    un_number: r.un_number, dg_class: r.dg_class, subsidiary_class: r.subsidiary_class, packing_group: r.packing_group,
-    hazchem_code: r.hazchem_code, proper_shipping_name: r.proper_shipping_name, signal_word: r.signal_word, pictograms: r.pictograms,
-  })).sort((a, b) => String(a.product_name).toLowerCase().localeCompare(String(b.product_name).toLowerCase()) || a.location_id - b.location_id);
-  return json({ generated_at: nowIso(), rows, totals });
-}
+// (places, links, the manifest and packs live in places.js)
 
 export async function handleExportAll(c) {
   const { env } = c;
   const today = todayIso();
-  const [chems, locs, assess, ctl, sdsFiles, settings] = await Promise.all([
+  const [chems, placesRes, linksRes, assess, ctl, sdsFiles, settings] = await Promise.all([
     env.DB.prepare(
       `SELECT c.id, c.product_name, c.supplier, c.synonyms, c.product_codes, c.use_description, c.physical_form, c.decision,
          c.decision_note, c.decision_by, c.decision_at, c.ghs_classification, c.classification_flags, c.decision_override,
@@ -766,10 +692,8 @@ export async function handleExportAll(c) {
          s.subsidiary_class, s.packing_group, s.hazchem_code, s.proper_shipping_name, s.cas_numbers
        FROM chemicals c LEFT JOIN sds s ON s.id = c.sds_id ORDER BY c.product_name COLLATE NOCASE, c.id`
     ).all(),
-    env.DB.prepare(
-      `SELECT l.id, l.chemical_id, l.location, l.spill_compound, l.quantity, l.unit, l.container_note
-       FROM chemicals c JOIN storage_locations l ON l.chemical_id = c.id ORDER BY c.id, l.id`
-    ).all(),
+    env.DB.prepare("SELECT id, name, place_type, registration, counts_toward_totals, archived, notes, chemical_count FROM places ORDER BY archived, place_type, name COLLATE NOCASE").all(),
+    env.DB.prepare("SELECT id, chemical_id, place_id, quantity, unit, container_note, spill_compound FROM chemical_places ORDER BY place_id, id").all(),
     env.DB.prepare(
       `SELECT a.id, a.chemical_id, a.sds_id, a.assessed_date, a.sds_date, a.form, a.use_description, a.route_inhalation, a.route_ingestion,
          a.route_absorption, a.fire_response, a.spill_response, a.controls_notes, a.ppe_notes, a.risk_level, a.monitoring_needed,
@@ -798,9 +722,10 @@ export async function handleExportAll(c) {
     };
   });
   const chemById = new Map(chemicals.map(ch => [ch.id, ch]));
-  const manifestTotals = computeSiteTotals(locs.results.filter(l => l.quantity > 0).map(l => {
+  const countingPlaces = placesRes.results.filter(p => !p.archived);
+  const placeTotals = computePlaceTotals(countingPlaces, linksRes.results.map(l => {
     const ch = chemById.get(l.chemical_id);
-    return { id: l.id, chemical_id: l.chemical_id, name: ch ? ch.product_name : "", classification: ch ? ch.classification : null, quantity: l.quantity, unit: l.unit, location: l.location, spill_compound: l.spill_compound };
+    return { place_id: l.place_id, id: l.id, chemical_id: l.chemical_id, name: ch ? ch.product_name : "", classification: ch ? ch.classification : null, quantity: l.quantity, unit: l.unit, spill_compound: l.spill_compound };
   }));
   const byAssessment = new Map();
   for (const r of ctl.results) { const a = byAssessment.get(r.assessment_id) || []; a.push({ kind: r.kind, label: r.label }); byAssessment.set(r.assessment_id, a); }
@@ -812,8 +737,9 @@ export async function handleExportAll(c) {
       email: settings.company_email || "", reg: settings.company_reg || "",
     },
     chemicals,
-    locations: locs.results,
-    manifest_totals: manifestTotals,
+    places: placesRes.results,
+    links: linksRes.results,
+    place_totals: placeTotals,
     assessments,
     sds_files: sdsFiles.results.map(s => ({ sds_id: s.id, file_name: s.file_name, product_names: names.get(s.id) || [], has_file: !!s.has_file })),
   });

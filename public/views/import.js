@@ -40,7 +40,7 @@
       function stepChoose(msg) {
         shell(`${msg ? `<div class="notice bad" role="alert">${App.esc(msg)}</div>` : ''}
           <div class="card"><h2>1. Choose your spreadsheet</h2>
-          <p class="hint">An Excel file (.xlsx). Any layout works as long as the first rows have column headings, such as Product, Supplier, Location, Quantity. You will match the columns in the next step. Nothing is saved until the final step.</p>
+          <p class="hint">An Excel file (.xlsx). Any layout works as long as the first rows have column headings, such as Product, Supplier, Place, Quantity. You will match the columns in the next step. Nothing is saved until the final step.</p>
           <label for="imFile">Spreadsheet</label><input type="file" id="imFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div>`);
         root.querySelector('#imFile').addEventListener('change', async (e) => {
           const f = e.target.files[0]; if (!f) return;
@@ -101,7 +101,7 @@
         });
       }
 
-      const PREVIEW_COLS = [['product_name', 'Product'], ['supplier', 'Supplier'], ['location', 'Location'], ['quantity', 'Qty'], ['unit', 'Unit'], ['un_number', 'UN'], ['dg_class', 'ADG class'], ['packing_group', 'PG'], ['hazchem_code', 'Hazchem'], ['sds_date', 'SDS date'], ['decision', 'Decision']];
+      const PREVIEW_COLS = [['product_name', 'Product'], ['supplier', 'Supplier'], ['place', 'Place'], ['place_type', 'Type'], ['quantity', 'Qty'], ['unit', 'Unit'], ['un_number', 'UN'], ['dg_class', 'ADG class'], ['packing_group', 'PG'], ['hazchem_code', 'Hazchem'], ['sds_date', 'SDS date'], ['decision', 'Decision']];
 
       function stepPreview(dry) {
         const s = IM.summarise(st.items);
@@ -111,7 +111,7 @@
         const head = `<thead><tr><th scope="col">Row</th>${PREVIEW_COLS.map(([, l]) => `<th scope="col">${l}</th>`).join('')}<th scope="col">Problems</th></tr></thead>`;
         shell(`<div class="card"><h2>3. Check the rows</h2>
           <div class="im-stats"><span><strong>${s.total}</strong> rows found</span><span><strong>${s.importable}</strong> ready to import</span><span><strong>${s.withWarnings}</strong> with notes</span><span><strong>${s.skipped}</strong> will be skipped</span></div>
-          <p class="hint">Rows with a note are still imported, with the unclear value left blank. Rows with no product name are skipped. Products already in the register (same name and supplier) are skipped by the import.</p>
+          <p class="hint">Rows with a note are still imported, with the unclear value left blank. Rows with no product name are skipped. Products already in the register (same name and supplier) are skipped by the import. The place column becomes a place (a workshop, vehicle or site); places that do not exist yet are created.</p>
           ${probs.length ? `<h3 style="font-size:14px;margin:12px 0 6px">Rows with notes (${probs.length})</h3><div class="im-wrap" style="max-height:340px;overflow:auto"><table class="im-t">${head}<tbody>${probs.slice(0, 200).map(rowHtml).join('')}</tbody></table></div>${probs.length > 200 ? '<p class="hint">Showing the first 200.</p>' : ''}` : ''}
           <h3 style="font-size:14px;margin:12px 0 6px">First ${shown.length} rows</h3><div class="im-wrap"><table class="im-t">${head}<tbody>${shown.map(rowHtml).join('')}</tbody></table></div>
           <div id="imDry">${dry || ''}</div>
@@ -135,12 +135,13 @@
       }
 
       async function send(items, dry) {
-        const total = { created: 0, skipped: 0, locations: 0, errors: [], skippedRows: [] };
+        const total = { created: 0, skipped: 0, locations: 0, places: 0, errors: [], skippedRows: [] };
         for (const part of batches(items)) {
           const r = await App.api('/import', { method: 'POST', body: { rows: part.map((i) => i.row), dry_run: !!dry } });
           total.created += Number(r.created) || 0;
           total.skipped += Number(r.skipped) || 0;
-          total.locations += Number(r.locations_created) || 0;
+          total.locations += Number(r.links_created != null ? r.links_created : r.locations_created) || 0;
+          total.places += Number(r.places_created) || 0;
           (r.errors || []).forEach((e) => {
             const it = e && e.row ? part[e.row - 1] : null;
             total.errors.push((it ? 'Row ' + it.rowNumber + ': ' : '') + (typeof e === 'string' ? e : e.error || e.message || JSON.stringify(e)));
@@ -159,7 +160,7 @@
           const r = await send(rows, dry);
           if (dead) return;
           if (dry) {
-            const html = `<div class="notice" role="status" style="margin-top:12px"><strong>Test run finished.</strong> ${r.created} would be added, ${r.skipped} already in the register would be skipped, ${r.locations} storage location${r.locations === 1 ? '' : 's'} would be added${r.errors.length ? `, and ${r.errors.length} had problems` : ''}.
+            const html = `<div class="notice" role="status" style="margin-top:12px"><strong>Test run finished.</strong> ${r.created} would be added, ${r.skipped} already in the register would be skipped, ${r.locations} place link${r.locations === 1 ? '' : 's'} would be added${r.places ? ' and ' + r.places + ' new place' + (r.places === 1 ? '' : 's') + ' created' : ''}${r.errors.length ? `, and ${r.errors.length} had problems` : ''}.
               ${r.errors.length ? `<ul>${r.errors.slice(0, 20).map((e) => `<li>${App.esc(e)}</li>`).join('')}</ul>` : ''}
               <div class="actions" style="margin-top:10px"><button type="button" class="primary" id="imGo"${r.created ? '' : ' disabled'}>Import ${r.created} chemical${r.created === 1 ? '' : 's'} now</button></div></div>`;
             stepPreview(html);

@@ -108,62 +108,47 @@ import { CLASSES } from './classes.mjs';
 // classification is shared by every chemical on an SDS and comes from classes.mjs. Special cases on a chemical:
 //   unclassified: true  -> ghs_classification NULL (no decision yet)   classification: 'admin' -> entered by an admin (no SDS)
 //   decision_override, pictograms_add -> admin overrides (shown as overrides)   sds null = no SDS on file.
-// locs: [location, quantity, unit, note]
-const FC1 = 'Workshop - flammables cabinet 1';
-const FC2 = 'Workshop - flammables cabinet 2';
-const PAINT = 'Workshop - paint store';
-const GAS = 'Gas cage (outdoor, fenced)';
-const MS = 'Maintenance store room';
-const VAN = 'Maintenance van 1';
-const GEN = 'Generator shed';
-const CLEAN = 'Cleaners cupboard';
-const YARD = 'Yard shed';
-const PLS = 'Plaster store';
-const BENCH = 'Workshop - bench';
-const FUEL = 'Fuel store (bunded)';
-const CAB1 = 'Cabinet 1 sump';
-const PB = 'Paint store bund';
 
 export const CHEMICALS = [
-  { n: 'Marlow Acetone Solvent', sds: 'acetone', codes: 'MIS-ACE-5', syn: 'Acetone, propanone', use: 'Equipment and glue clean-up in the workshop', risk: 'c', locs: [[FC1, 10, 'L', '2 x 5 L cans', CAB1], [MS, 5, 'L', '1 x 5 L can']] },
-  { n: 'Marlow Methylated Spirits', sds: 'metho', codes: 'MIS-MET-5', syn: 'Metho, denatured alcohol', use: 'Surface wipe before gluing and finishing', risk: 'c', locs: [[FC1, 20, 'L', '4 x 5 L cans', CAB1], [VAN, 5, 'L', '1 x 5 L can']], history: true },
-  { n: 'Marlow Mineral Turpentine', sds: 'turps', pictograms_add: ['GHS09'], codes: 'MIS-MT-4', syn: 'Mineral turps, white spirit', use: 'Thinning oil-based finishes and cleaning brushes', risk: 'c', locs: [[FC1, 16, 'L', '4 x 4 L cans', CAB1], [PAINT, 8, 'L', '2 x 4 L cans', PB]] },
-  { n: 'Marlow Lacquer Thinners', sds: 'thinners', codes: 'MIS-LT-4', syn: 'Thinners', use: 'Cleaning spray gun and thinning lacquer', risk: 'x', gap: 'Decanted into unlabelled bottles at the spray bench and used without local exhaust. Fix: label all bottles, use the booth extraction, review the SDS (it is overdue).', locs: [[FC2, 12, 'L', '3 x 4 L cans'], [BENCH, 1, 'L', 'decanted bottle']] },
-  { n: 'Kestrel Oil Stain - Walnut', sds: 'stain', codes: 'KC-OS-WAL-1', syn: 'Oil-based stain', use: 'Staining joinery in the finishing room', risk: 'c', locs: [[PAINT, 8, 'L', '8 x 1 L tins', PB]] },
-  { n: 'Kestrel Oil Stain - Jarrah', sds: 'stain', codes: 'KC-OS-JAR-1', syn: 'Oil-based stain', use: 'Staining joinery in the finishing room', risk: 'c', locs: [[PAINT, 6, 'L', '6 x 1 L tins', PB]] },
-  { n: 'Kestrel Polyurethane Varnish Gloss', sds: 'varnish', codes: 'KC-PU-G-4', syn: 'Solvent-based varnish', use: 'Clear coat on doors and benchtops', risk: 'c', locs: [[PAINT, 12, 'L', '3 x 4 L tins', PB]] },
-  { n: 'Stickfast Contact Adhesive 500', sds: 'contact', codes: 'SF-CA500-5', syn: 'Contact cement', use: 'Laminate and veneer bonding', risk: 'c', locs: [[FC2, 10, 'L', '2 x 5 L tins'], [BENCH, 1, 'L', 'working tin']] },
-  { n: 'Stickfast Grip Max Construction Adhesive 290 mL cartridge', sds: 'grip', codes: 'SF-GM-290', syn: 'Construction adhesive', use: 'Fixing timber and panels on site', risk: 'c', locs: [[VAN, 7, 'L', '24 x 290 mL cartridges']] },
-  { n: 'Stickfast Grip Max Construction Adhesive 375 mL cartridge', sds: 'grip', codes: 'SF-GM-375', syn: 'Construction adhesive', use: 'Fixing timber and panels on site', risk: 'c', locs: [[MS, 9, 'L', '24 x 375 mL cartridges']] },
-  { n: 'Stickfast Grip Max Construction Adhesive 600 mL sausage', sds: 'grip', codes: 'SF-GM-600', syn: 'Construction adhesive', use: 'Fixing timber and panels on site', risk: 'n', locs: [[MS, 3.6, 'L', '6 x 600 mL sausages']] },
-  { n: 'Stickfast Grip Max Construction Adhesive 4 L pail', sds: 'grip', codes: 'SF-GM-4000', syn: 'Construction adhesive', use: 'Bulk adhesive for floor and panel work', risk: 'c', locs: [[MS, 8, 'L', '2 x 4 L pails']] },
-  { n: 'Harbourlight Unleaded Petrol', sds: 'petrol', codes: 'HF-ULP', syn: 'Petrol, gasoline', use: 'Fuel for the portable generator and small engines', risk: 'c', locs: [[GEN, 35, 'L', '3 x 10 L and 1 x 5 L approved jerry cans'], [VAN, 10, 'L', '1 x 10 L jerry can']] },
-  { n: 'Harbourlight Diesel Fuel', sds: 'diesel', codes: 'HF-DSL', syn: 'Diesel', use: 'Fuel for the work ute and site generator', risk: 'n', locs: [[FUEL, 800, 'L', '1 x 1000 L bunded fuel cube, 800 L held'], [GEN, 60, 'L', '3 x 20 L jerry cans']] },
-  { n: 'Harbourlight Two-Stroke Fuel Mix 50:1', sds: 'twostroke', codes: 'HF-2S-5', syn: 'Premix', use: 'Brushcutter and chainsaw fuel', unclassified: true, risk: 'u', blank: true, locs: [[YARD, 5, 'L', '1 x 5 L can']] },
-  { n: 'Fernhill Brush Cleaner and Thinner', sds: 'brushclean', codes: 'FT-BC-2', syn: 'Brush cleaner', use: 'Cleaning brushes after oil-based finishes', risk: 'c', locs: [[PAINT, 4, 'L', '2 x 2 L cans', PB]] },
-  { n: 'Fernhill Penetrating Decking Oil', sds: 'decking', codes: 'FT-DO-10', syn: 'Decking oil', use: 'Oiling timber decks and outdoor furniture', risk: 'c', locs: [[PAINT, 20, 'L', '2 x 10 L tins, same bund as the stains and varnish', PB], ['Outdoor decking store', 10, 'L', '1 x 10 L tin, no other flammable liquids there']] },
-  { n: 'Kestrel Spray Enamel Aerosol Gloss Black', sds: 'spayenamel', codes: 'KC-SE-GB', syn: 'Spray paint', use: 'Touch-up of metal fittings', risk: 'c', locs: [[FC2, 4.8, 'L', '12 x 400 mL aerosols']] },
-  { n: 'Ironwood Penetrating Spray', sds: 'penetrant', codes: 'IL-PS-300', syn: 'Penetrating oil, freeing spray', use: 'Freeing rusted fasteners', risk: 'n', locs: [[MS, 3.6, 'L', '12 x 300 g aerosols'], [VAN, 0.6, 'L', '2 x 300 g aerosols']] },
-  { n: 'Ironwood Silicone Lubricant Spray', sds: 'silicone', codes: 'IL-SL-300', syn: 'Silicone spray', use: 'Lubricating sliding doors, drawers and saw tables', risk: 'n', locs: [[BENCH, 1.8, 'L', '6 x 300 g aerosols']] },
-  { n: 'Wattlebird Brake and Parts Cleaner Aerosol', sds: 'brakeclean', codes: 'WW-BPC-500', syn: 'Brake cleaner', use: 'Degreasing machine parts', risk: 'x', gap: 'Used indoors near the grinder with no ventilation. Fix: use outdoors or with local exhaust, keep away from ignition, update SDS (overdue).', locs: [[MS, 3, 'L', '6 x 500 mL aerosols']] },
-  { n: 'Stickfast Spray Adhesive Aerosol', sds: 'sprayglue', codes: 'SF-SA-400', syn: 'Spray glue', use: 'Bonding foam and laminate offcuts', risk: 'c', locs: [[FC2, 2.4, 'L', '6 x 400 g aerosols']] },
-  { n: 'Wattlebird Expanding Foam Gap Filler', sds: 'foam', codes: 'WW-EF-750', syn: 'Gap filling foam, PU foam', use: 'Sealing gaps around frames on site', risk: 'c', surv: 'Contains MDI, a respiratory sensitiser. Anyone with asthma should avoid use; ask a doctor about health surveillance.', locs: [[MS, 4.5, 'L', '6 x 750 mL cans']] },
-  { n: 'Quillon LPG Cylinders (9 kg and 45 kg)', sds: 'lpg', codes: 'QI-LPG-9 / QI-LPG-45', syn: 'LPG, propane', use: 'Workshop gas heaters and torches for site work', risk: 'c', locs: [[GAS, 210, 'L', '2 x 45 kg cylinders for the workshop heaters (about 105 L water capacity each)'], [VAN, 9, 'kg', '1 x 9 kg cylinder (recorded in kg: the table gives gases in litres, so this is flagged)']] },
-  { n: 'Quillon Acetylene (dissolved gas)', sds: 'acetylene', codes: 'QI-C2H2-G', syn: 'Acetylene', use: 'Oxy-acetylene cutting and brazing', risk: 'c', locs: [[GAS, 40, 'L', '1 x G size cylinder (water capacity)']] },
-  { n: 'Quillon Oxygen (compressed)', sds: 'oxygen', codes: 'QI-O2-G', syn: 'Oxygen', use: 'Oxy-acetylene cutting and brazing', risk: 'c', locs: [[GAS, 50, 'L', '1 x G size cylinder (water capacity)']] },
-  { n: 'Quillon Welding Shielding Gas (Argon / Carbon Dioxide)', sds: 'shield', codes: 'QI-ARCO2-E', syn: 'Mig mix, argon CO2', use: 'MIG welding of steel brackets', risk: 'n', locs: [[GAS, 50, 'L', '1 x E size cylinder (water capacity)']] },
-  { n: 'Tidewater Hydrochloric Acid 32%', sds: 'hcl', codes: 'TC-HCL-5', syn: 'Spirit of salts, muriatic acid', use: 'Cleaning masonry and descaling', risk: 'c', locs: [[MS, 10, 'L', '2 x 5 L bottles in bunded tray']] },
-  { n: 'Tidewater Caustic Soda Flakes', sds: 'caustic', codes: 'TC-NAOH-2', syn: 'Sodium hydroxide, lye', use: 'Stripping old paint from timber', risk: 'x', gap: 'Stored on an open shelf with no eyewash station nearby and no face shield. Fix: lockable cabinet, eyewash, face shield.', locs: [[MS, 5, 'kg', '2 x 2.5 kg tubs']] },
-  { n: 'Tidewater Liquid Chlorine 12.5%', sds: 'bleach', codes: 'TC-NAOCL-20', syn: 'Sodium hypochlorite, liquid pool chlorine', use: 'Mould treatment and sanitising', risk: 'c', locs: [[CLEAN, 20, 'L', '1 x 20 L drum']] },
-  { n: 'Tidewater Drain Unblocker Gel', sds: 'drain', codes: 'TC-DUG-1', syn: 'Drain cleaner', use: 'Clearing workshop sink drain', risk: 'c', locs: [[CLEAN, 4, 'L', '4 x 1 L bottles']] },
-  { n: 'Wattlebird Battery Acid (Sulfuric Acid 35%)', sds: 'battery', codes: 'WW-BA-5', syn: 'Battery electrolyte', use: 'Topping up lead-acid batteries', risk: 'x', gap: 'Decanted with a plastic jug and no goggles or apron. Fix: dedicated funnel, goggles, apron, update SDS (overdue).', locs: [[MS, 5, 'L', '1 x 5 L bottle']] },
-  { n: 'Tidewater Hydrogen Peroxide 35%', sds: 'peroxide', codes: 'TC-H2O2-5', syn: 'Peroxide', use: 'Mould and stain removal on timber', risk: 'c', locs: [[CLEAN, 5, 'L', '1 x 5 L bottle']] },
-  { n: 'Kestrel Two-Pack Epoxy Resin (Part A)', sds: 'epoxyA', codes: 'KC-EPX-A-2', syn: 'Epoxy resin', use: 'Timber repair and bonding', risk: 'c', locs: [[PAINT, 3, 'L', '3 x 1 L tins']] },
-  { n: 'Kestrel Two-Pack Epoxy Hardener (Part B)', sds: 'epoxyB', codes: 'KC-EPX-B-2', syn: 'Epoxy hardener', use: 'Timber repair and bonding', risk: 'c', locs: [[PAINT, 1.5, 'L', '3 x 500 mL tins']] },
-  { n: 'Bluegum General Purpose Cement', sds: 'cement', codes: 'BG-GP-20', syn: 'Portland cement, GP cement', use: 'Footings and post setting', risk: 'c', locs: [[YARD, 100, 'kg', '5 x 20 kg bags']] },
-  { n: 'Wattlebird Rust Converter', sds: 'rustconv', codes: 'WW-RC-1', syn: 'Rust treatment', use: 'Treating rusted brackets', risk: 'n', locs: [[MS, 2, 'L', '2 x 1 L bottles']] },
-  { n: 'Wattlebird Soldering Flux Paste', sds: 'flux', codes: 'WW-SFP-100', syn: 'Flux', use: 'Soldering copper fittings', risk: 'u', locs: [[BENCH, 0.2, 'kg', '2 x 100 g tubs']] },
-  { n: 'Tidewater Multi-Purpose Floor Cleaner Concentrate', sds: 'floorclean', codes: 'TC-MPFC-5', syn: 'Floor cleaner', use: 'Cleaning workshop and office floors', risk: 'n', locs: [[CLEAN, 5, 'L', '1 x 5 L bottle']] },
+  { n: 'Marlow Acetone Solvent', sds: 'acetone', codes: 'MIS-ACE-5', syn: 'Acetone, propanone', use: 'Equipment and glue clean-up in the workshop', risk: 'c' },
+  { n: 'Marlow Methylated Spirits', sds: 'metho', codes: 'MIS-MET-5', syn: 'Metho, denatured alcohol', use: 'Surface wipe before gluing and finishing', risk: 'c', history: true },
+  { n: 'Marlow Mineral Turpentine', sds: 'turps', pictograms_add: ['GHS09'], codes: 'MIS-MT-4', syn: 'Mineral turps, white spirit', use: 'Thinning oil-based finishes and cleaning brushes', risk: 'c' },
+  { n: 'Marlow Lacquer Thinners', sds: 'thinners', codes: 'MIS-LT-4', syn: 'Thinners', use: 'Cleaning spray gun and thinning lacquer', risk: 'x', gap: 'Decanted into unlabelled bottles at the spray bench and used without local exhaust. Fix: label all bottles, use the booth extraction, review the SDS (it is overdue).' },
+  { n: 'Kestrel Oil Stain - Walnut', sds: 'stain', codes: 'KC-OS-WAL-1', syn: 'Oil-based stain', use: 'Staining joinery in the finishing room', risk: 'c' },
+  { n: 'Kestrel Oil Stain - Jarrah', sds: 'stain', codes: 'KC-OS-JAR-1', syn: 'Oil-based stain', use: 'Staining joinery in the finishing room', risk: 'c' },
+  { n: 'Kestrel Polyurethane Varnish Gloss', sds: 'varnish', codes: 'KC-PU-G-4', syn: 'Solvent-based varnish', use: 'Clear coat on doors and benchtops', risk: 'c' },
+  { n: 'Stickfast Contact Adhesive 500', sds: 'contact', codes: 'SF-CA500-5', syn: 'Contact cement', use: 'Laminate and veneer bonding', risk: 'c' },
+  { n: 'Stickfast Grip Max Construction Adhesive 290 mL cartridge', sds: 'grip', codes: 'SF-GM-290', syn: 'Construction adhesive', use: 'Fixing timber and panels on site', risk: 'c' },
+  { n: 'Stickfast Grip Max Construction Adhesive 375 mL cartridge', sds: 'grip', codes: 'SF-GM-375', syn: 'Construction adhesive', use: 'Fixing timber and panels on site', risk: 'c' },
+  { n: 'Stickfast Grip Max Construction Adhesive 600 mL sausage', sds: 'grip', codes: 'SF-GM-600', syn: 'Construction adhesive', use: 'Fixing timber and panels on site', risk: 'n' },
+  { n: 'Stickfast Grip Max Construction Adhesive 4 L pail', sds: 'grip', codes: 'SF-GM-4000', syn: 'Construction adhesive', use: 'Bulk adhesive for floor and panel work', risk: 'c' },
+  { n: 'Harbourlight Unleaded Petrol', sds: 'petrol', codes: 'HF-ULP', syn: 'Petrol, gasoline', use: 'Fuel for the portable generator and small engines', risk: 'c' },
+  { n: 'Harbourlight Diesel Fuel', sds: 'diesel', codes: 'HF-DSL', syn: 'Diesel', use: 'Fuel for the work ute and site generator', risk: 'n' },
+  { n: 'Harbourlight Two-Stroke Fuel Mix 50:1', sds: 'twostroke', codes: 'HF-2S-5', syn: 'Premix', use: 'Brushcutter and chainsaw fuel', unclassified: true, risk: 'u', blank: true },
+  { n: 'Fernhill Brush Cleaner and Thinner', sds: 'brushclean', codes: 'FT-BC-2', syn: 'Brush cleaner', use: 'Cleaning brushes after oil-based finishes', risk: 'c' },
+  { n: 'Fernhill Penetrating Decking Oil', sds: 'decking', codes: 'FT-DO-10', syn: 'Decking oil', use: 'Oiling timber decks and outdoor furniture', risk: 'c' },
+  { n: 'Kestrel Spray Enamel Aerosol Gloss Black', sds: 'spayenamel', codes: 'KC-SE-GB', syn: 'Spray paint', use: 'Touch-up of metal fittings', risk: 'c' },
+  { n: 'Ironwood Penetrating Spray', sds: 'penetrant', codes: 'IL-PS-300', syn: 'Penetrating oil, freeing spray', use: 'Freeing rusted fasteners', risk: 'n' },
+  { n: 'Ironwood Silicone Lubricant Spray', sds: 'silicone', codes: 'IL-SL-300', syn: 'Silicone spray', use: 'Lubricating sliding doors, drawers and saw tables', risk: 'n' },
+  { n: 'Wattlebird Brake and Parts Cleaner Aerosol', sds: 'brakeclean', codes: 'WW-BPC-500', syn: 'Brake cleaner', use: 'Degreasing machine parts', risk: 'x', gap: 'Used indoors near the grinder with no ventilation. Fix: use outdoors or with local exhaust, keep away from ignition, update SDS (overdue).' },
+  { n: 'Stickfast Spray Adhesive Aerosol', sds: 'sprayglue', codes: 'SF-SA-400', syn: 'Spray glue', use: 'Bonding foam and laminate offcuts', risk: 'c' },
+  { n: 'Wattlebird Expanding Foam Gap Filler', sds: 'foam', codes: 'WW-EF-750', syn: 'Gap filling foam, PU foam', use: 'Sealing gaps around frames on site', risk: 'c', surv: 'Contains MDI, a respiratory sensitiser. Anyone with asthma should avoid use; ask a doctor about health surveillance.' },
+  { n: 'Quillon LPG Cylinders (9 kg and 45 kg)', sds: 'lpg', codes: 'QI-LPG-9 / QI-LPG-45', syn: 'LPG, propane', use: 'Workshop gas heaters and torches for site work', risk: 'c' },
+  { n: 'Quillon Acetylene (dissolved gas)', sds: 'acetylene', codes: 'QI-C2H2-G', syn: 'Acetylene', use: 'Oxy-acetylene cutting and brazing', risk: 'c' },
+  { n: 'Quillon Oxygen (compressed)', sds: 'oxygen', codes: 'QI-O2-G', syn: 'Oxygen', use: 'Oxy-acetylene cutting and brazing', risk: 'c' },
+  { n: 'Quillon Welding Shielding Gas (Argon / Carbon Dioxide)', sds: 'shield', codes: 'QI-ARCO2-E', syn: 'Mig mix, argon CO2', use: 'MIG welding of steel brackets', risk: 'n' },
+  { n: 'Tidewater Hydrochloric Acid 32%', sds: 'hcl', codes: 'TC-HCL-5', syn: 'Spirit of salts, muriatic acid', use: 'Cleaning masonry and descaling', risk: 'c' },
+  { n: 'Tidewater Caustic Soda Flakes', sds: 'caustic', codes: 'TC-NAOH-2', syn: 'Sodium hydroxide, lye', use: 'Stripping old paint from timber', risk: 'x', gap: 'Stored on an open shelf with no eyewash station nearby and no face shield. Fix: lockable cabinet, eyewash, face shield.' },
+  { n: 'Tidewater Liquid Chlorine 12.5%', sds: 'bleach', codes: 'TC-NAOCL-20', syn: 'Sodium hypochlorite, liquid pool chlorine', use: 'Mould treatment and sanitising', risk: 'c' },
+  { n: 'Tidewater Drain Unblocker Gel', sds: 'drain', codes: 'TC-DUG-1', syn: 'Drain cleaner', use: 'Clearing workshop sink drain', risk: 'c' },
+  { n: 'Wattlebird Battery Acid (Sulfuric Acid 35%)', sds: 'battery', codes: 'WW-BA-5', syn: 'Battery electrolyte', use: 'Topping up lead-acid batteries', risk: 'x', gap: 'Decanted with a plastic jug and no goggles or apron. Fix: dedicated funnel, goggles, apron, update SDS (overdue).' },
+  { n: 'Tidewater Hydrogen Peroxide 35%', sds: 'peroxide', codes: 'TC-H2O2-5', syn: 'Peroxide', use: 'Mould and stain removal on timber', risk: 'c' },
+  { n: 'Kestrel Two-Pack Epoxy Resin (Part A)', sds: 'epoxyA', codes: 'KC-EPX-A-2', syn: 'Epoxy resin', use: 'Timber repair and bonding', risk: 'c' },
+  { n: 'Kestrel Two-Pack Epoxy Hardener (Part B)', sds: 'epoxyB', codes: 'KC-EPX-B-2', syn: 'Epoxy hardener', use: 'Timber repair and bonding', risk: 'c' },
+  { n: 'Bluegum General Purpose Cement', sds: 'cement', codes: 'BG-GP-20', syn: 'Portland cement, GP cement', use: 'Footings and post setting', risk: 'c' },
+  { n: 'Wattlebird Rust Converter', sds: 'rustconv', codes: 'WW-RC-1', syn: 'Rust treatment', use: 'Treating rusted brackets', risk: 'n' },
+  { n: 'Wattlebird Soldering Flux Paste', noAssessment: true, sds: 'flux', codes: 'WW-SFP-100', syn: 'Flux', use: 'Soldering copper fittings', risk: 'u' },
+  { n: 'Tidewater Multi-Purpose Floor Cleaner Concentrate', sds: 'floorclean', codes: 'TC-MPFC-5', syn: 'Floor cleaner', use: 'Cleaning workshop and office floors', risk: 'n' },
   // ---- Brightboard (ten products, one SDS)
   ...[
     ['Brightboard Base Coat Plaster 20 kg', 'BB-BCP-20', 20],
@@ -176,26 +161,26 @@ export const CHEMICALS = [
     ['Brightboard Jointing Cement', 'BB-JC-10', 10],
     ['Brightboard Texture Coat Fine', 'BB-TXF-20', 20],
     ['Brightboard Lightweight Topping Compound', 'BB-LTC-15', 15],
-  ].map(([n, code, kg], i) => ({ n, sds: 'plaster', codes: code, syn: 'Plaster product', use: 'Patching and finishing plasterboard walls', risk: i % 4 === 0 ? 'n' : 'c', locs: kg >= 20 ? [[PLS, kg, 'kg', Math.round(kg / 20) + ' x 20 kg bags']] : (i === 6 ? [] : [[PLS, kg, 'kg', '1 bag']]) })),
+  ].map(([n, code, kg], i) => ({ n, sds: 'plaster', codes: code, syn: 'Plaster product', use: 'Patching and finishing plasterboard walls', risk: i % 4 === 0 ? 'n' : 'c' })),
   // ---- not hazardous
-  { n: 'Stickfast PVA Wood Glue', sds: 'pva', codes: 'SF-PVA-5', syn: 'White glue', use: 'Joinery assembly', risk: 'n', locs: [[BENCH, 5, 'L', '1 x 5 L pail']] },
-  { n: 'Stickfast Weatherproof Wood Glue (D4)', sds: 'pvad4', codes: 'SF-D4-2', syn: 'Water-resistant PVA', use: 'Exterior joinery assembly', risk: 'n', locs: [[BENCH, 4, 'L', '2 x 2 L bottles']] },
-  { n: 'Kestrel Acrylic Paint - Interior Warm White 10 L', sds: 'acrylic', codes: 'KC-AP-INT-10', syn: 'Water-based paint', use: 'Painting repairs inside', risk: 'n', locs: [[PAINT, 10, 'L', '1 x 10 L tin']] },
-  { n: 'Kestrel Acrylic Paint - Exterior Surf 10 L', sds: 'acrylic', codes: 'KC-AP-EXT-10', syn: 'Water-based paint', use: 'Painting repairs outside', risk: 'n', locs: [[PAINT, 10, 'L', '1 x 10 L tin']] },
-  { n: 'Kestrel Acrylic Paint - Ceiling White 10 L', sds: 'acrylic', codes: 'KC-AP-CEI-10', syn: 'Water-based paint', use: 'Ceiling repairs', risk: 'n', locs: [[PAINT, 10, 'L', '1 x 10 L tin']] },
-  { n: 'Kestrel Water-Based Floor Finish', sds: 'floorfinish', codes: 'KC-WBF-4', syn: 'Floor coating', use: 'Finishing timber floors', risk: 'n', locs: [[PAINT, 8, 'L', '2 x 4 L tins']] },
-  { n: 'Fernhill Timber Sealer (water-based)', sds: 'sealer', codes: 'FT-TS-4', syn: 'Sealer', use: 'Sealing raw timber before finishing', risk: 'n', locs: [[PAINT, 4, 'L', '1 x 4 L tin']] },
-  { n: 'Fernhill Beeswax Furniture Polish', sds: 'wax', codes: 'FT-BW-500', syn: 'Wax polish', use: 'Final polish on furniture', risk: 'n', locs: [[BENCH, 0.5, 'L', '1 x 500 g tin']] },
-  { n: 'Ironwood General Purpose Grease No. 2', sds: 'grease', codes: 'IL-GP2-450', syn: 'Grease', use: 'Greasing hinges and machine bearings', risk: 'n', locs: [[MS, 0.9, 'kg', '2 x 450 g cartridges']] },
-  { n: 'Ironwood Hydraulic Oil 46', sds: 'hydraulic', decision_override: 'hazardous', note: 'Overridden by an admin: treated as hazardous because it is used hot in the press.', codes: 'IL-HO46-20', syn: 'Hydraulic oil', use: 'Topping up the press and log splitter', risk: 'n', locs: [[MS, 20, 'L', '1 x 20 L drum']] },
-  { n: 'Ironwood Bar and Chain Oil', sds: 'chainoil', codes: 'IL-BCO-5', syn: 'Chainsaw oil', use: 'Chainsaw lubrication', risk: 'n', locs: [[YARD, 5, 'L', '1 x 5 L can']] },
-  { n: 'Ironwood 10W-40 Engine Oil', sds: 'engineoil', codes: 'IL-EO-5', syn: 'Engine oil', use: 'Servicing engines and generator', risk: 'n', locs: [[GEN, 10, 'L', '2 x 5 L cans']] },
-  { n: 'Wattlebird Neutral Cure Silicone Sealant', sds: 'silsealant', codes: 'WW-NCS-300', syn: 'Silicone sealant', use: 'Sealing around windows and benchtops', risk: 'n', locs: [[MS, 3, 'L', '10 x 300 mL cartridges']] },
-  { n: 'Wattlebird Workshop Hand Cleaner Gel', sds: 'handgel', codes: 'WW-HC-4', syn: 'Hand cleaner', use: 'Washing hands after workshop jobs', risk: 'u', locs: [[BENCH, 4, 'L', '1 x 4 L pump pack']] },
-  { n: 'Tidewater Dishwashing Detergent', sds: 'dishwash', codes: 'TC-DD-5', syn: 'Detergent', use: 'Washing up in the crib room', risk: 'n', locs: [[CLEAN, 5, 'L', '1 x 5 L bottle']] },
-  { n: 'Tidewater Glass and Surface Cleaner', sds: 'glassclean', codes: 'TC-GSC-750', syn: 'Spray and wipe', use: 'Cleaning windows and benches', risk: 'n', locs: [[CLEAN, 1.5, 'L', '2 x 750 mL trigger bottles']] },
+  { n: 'Stickfast PVA Wood Glue', sds: 'pva', codes: 'SF-PVA-5', syn: 'White glue', use: 'Joinery assembly', risk: 'n' },
+  { n: 'Stickfast Weatherproof Wood Glue (D4)', sds: 'pvad4', codes: 'SF-D4-2', syn: 'Water-resistant PVA', use: 'Exterior joinery assembly', risk: 'n' },
+  { n: 'Kestrel Acrylic Paint - Interior Warm White 10 L', sds: 'acrylic', codes: 'KC-AP-INT-10', syn: 'Water-based paint', use: 'Painting repairs inside', risk: 'n' },
+  { n: 'Kestrel Acrylic Paint - Exterior Surf 10 L', sds: 'acrylic', codes: 'KC-AP-EXT-10', syn: 'Water-based paint', use: 'Painting repairs outside', risk: 'n' },
+  { n: 'Kestrel Acrylic Paint - Ceiling White 10 L', sds: 'acrylic', codes: 'KC-AP-CEI-10', syn: 'Water-based paint', use: 'Ceiling repairs', risk: 'n' },
+  { n: 'Kestrel Water-Based Floor Finish', sds: 'floorfinish', codes: 'KC-WBF-4', syn: 'Floor coating', use: 'Finishing timber floors', risk: 'n' },
+  { n: 'Fernhill Timber Sealer (water-based)', sds: 'sealer', codes: 'FT-TS-4', syn: 'Sealer', use: 'Sealing raw timber before finishing', risk: 'n' },
+  { n: 'Fernhill Beeswax Furniture Polish', sds: 'wax', codes: 'FT-BW-500', syn: 'Wax polish', use: 'Final polish on furniture', risk: 'n' },
+  { n: 'Ironwood General Purpose Grease No. 2', sds: 'grease', codes: 'IL-GP2-450', syn: 'Grease', use: 'Greasing hinges and machine bearings', risk: 'n' },
+  { n: 'Ironwood Hydraulic Oil 46', sds: 'hydraulic', decision_override: 'hazardous', note: 'Overridden by an admin: treated as hazardous because it is used hot in the press.', codes: 'IL-HO46-20', syn: 'Hydraulic oil', use: 'Topping up the press and log splitter', risk: 'n' },
+  { n: 'Ironwood Bar and Chain Oil', sds: 'chainoil', codes: 'IL-BCO-5', syn: 'Chainsaw oil', use: 'Chainsaw lubrication', risk: 'n' },
+  { n: 'Ironwood 10W-40 Engine Oil', sds: 'engineoil', codes: 'IL-EO-5', syn: 'Engine oil', use: 'Servicing engines and generator', risk: 'n' },
+  { n: 'Wattlebird Neutral Cure Silicone Sealant', sds: 'silsealant', codes: 'WW-NCS-300', syn: 'Silicone sealant', use: 'Sealing around windows and benchtops', risk: 'n' },
+  { n: 'Wattlebird Workshop Hand Cleaner Gel', sds: 'handgel', codes: 'WW-HC-4', syn: 'Hand cleaner', use: 'Washing hands after workshop jobs', risk: 'u' },
+  { n: 'Tidewater Dishwashing Detergent', sds: 'dishwash', codes: 'TC-DD-5', syn: 'Detergent', use: 'Washing up in the crib room', risk: 'n' },
+  { n: 'Tidewater Glass and Surface Cleaner', sds: 'glassclean', codes: 'TC-GSC-750', syn: 'Spray and wipe', use: 'Cleaning windows and benches', risk: 'n' },
   // ---- no SDS on file
-  { n: 'Concrete Sealer (solvent-based, unlabelled tin)', sds: null, codes: '', syn: 'Masonry sealer', use: 'Sealing the yard slab (leftover tin, no SDS on file)', classification: 'admin', note: 'Classified by an admin from the can label until the SDS is obtained from the supplier.', risk: 'u', locs: [[YARD, 4, 'L', '1 x 4 L tin, label missing']] },
+  { n: 'Concrete Sealer (solvent-based, unlabelled tin)', sds: null, codes: '', syn: 'Masonry sealer', use: 'Sealing the yard slab (leftover tin, no SDS on file)', classification: 'admin', note: 'Classified by an admin from the can label until the SDS is obtained from the supplier.', risk: 'u' },
 ];
 
 export const USERS = [

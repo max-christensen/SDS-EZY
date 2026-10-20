@@ -1,12 +1,12 @@
 // Measures D1 rows read per request against a running LOCAL dev server started with DEBUG_ROWS=1:
 //   npx wrangler dev --local --port 8801 --persist-to .wrangler/agent-server --var DEBUG_ROWS:1
 //   node scripts/measure-rows.mjs [--base http://127.0.0.1:8801] [--sizes 60,600]
-// It tops the register up with synthetic "Measure NNNN" products (each with an SDS record and storage location, and an
+// It creates three places (a workshop, a vehicle, a site; the first holds 20 chemicals) and tops the register up with synthetic "Measure NNNN" products (each with an SDS record, a place link, and an
 // assessment on every second one) until the register holds each size, and prints the X-Rows-Read header for the key requests.
 // Admin login comes from MEASURE_EMAIL / MEASURE_PASSWORD (default: the test admin the server tests create).
 const arg = (n, d) => { const i = process.argv.indexOf("--" + n); return i > -1 ? process.argv[i + 1] : d; };
 const BASE = arg("base", "http://127.0.0.1:8801");
-const SIZES = arg("sizes", "60,600").split(",").map(Number);
+const SIZES = arg("sizes", "66,600").split(",").map(Number);
 const EMAIL = process.env.MEASURE_EMAIL || "admin@test.example";
 const PASSWORD = process.env.MEASURE_PASSWORD || "correct-horse-1";
 let cookie = "";
@@ -38,7 +38,16 @@ function pdfForm(i, data) {
   return fd;
 }
 
+const placeIds = [];
+async function ensurePlaces() {
+  const have = (await call("GET", "/api/places")).data;
+  for (const [name, type] of [["Measure Workshop", "workshop"], ["Measure Ute", "vehicle"], ["Measure Site", "site"]]) {
+    const f = have.find(p => p.name === name && p.place_type === type);
+    placeIds.push(f ? f.id : (await call("POST", "/api/places", { name, place_type: type })).data.id);
+  }
+}
 async function topUp(target) {
+  if (!placeIds.length) await ensurePlaces();
   const all = (await call("GET", "/api/chemicals?limit=2000")).data.items.filter(c => c.product_name.startsWith("Measure item"));
   let n = all.length;
   const classes = ["3", "8", "2.1", "6.1", "", "9"];
@@ -58,7 +67,7 @@ async function topUp(target) {
       product_name: `Measure item ${n}`, supplier: `Supplier ${n % 17}`, ghs_classification: n % 7 === 0 ? null : (n % 2 ? [{ c: "flam_liq", k: String(1 + (n % 4)) }, { c: "eye_dmg", k: "2A" }] : []),
       synonyms: "synonym alpha, synonym beta", product_codes: `P-${n}`, sds_id: sdsId,
     });
-    await call("POST", `/api/chemicals/${c.data.id}/locations`, { location: `Store ${n % 9}`, spill_compound: n % 5 === 0 ? "Bund A" : undefined, quantity: 5 + (n % 20), unit: n % 3 ? "L" : "kg" });
+    await call("POST", `/api/places/${placeIds[n <= 20 ? 0 : 1 + (n % 2)]}/chemicals`, { chemical_id: c.data.id, spill_compound: n % 5 === 0 ? "Bund A" : undefined, quantity: 5 + (n % 20), unit: n % 3 ? "L" : "kg" });
     if (n % 2 === 0) await call("POST", `/api/chemicals/${c.data.id}/assessments`, { risk_level: "significant_controlled", control_option_ids: [1, 6] });
   }
 }
@@ -76,6 +85,11 @@ for (const size of SIZES) {
   const search2 = await call("GET", "/api/chemicals?q=acetone");
   const manifest = await call("GET", "/api/manifest");
   const exp = await call("GET", "/api/export/all");
+  const picker = await call("GET", "/api/places");
+  const page = await call("GET", `/api/places/${placeIds[0]}`);
+  const synth = list.data.items.filter(c => c.product_name.startsWith("Measure item")).slice(0, 30).map(c => c.id);
+  const pack10 = await call("GET", `/api/pack?ids=${synth.slice(0, 10).join(",")}`);
+  const pack30 = await call("GET", `/api/pack?ids=${synth.join(",")}`);
   console.log(`\n--- register holds ${total} chemicals (${size} synthetic target) ---`);
   const row = (k, r) => console.log(`${k.padEnd(26)}rows_read=${r.rows}  (status ${r.status})`);
   row("GET /api/review", review);
@@ -86,5 +100,9 @@ for (const size of SIZES) {
   row("search ?q= (many hits)", search2);
   row("GET /api/manifest", manifest);
   row("GET /api/export/all", exp);
+  row("GET /api/places (picker)", picker);
+  row("GET /api/places/:id (20 chem)", page);
+  row("GET /api/pack (10 chem)", pack10);
+  row("GET /api/pack (30 chem)", pack30);
   results.push({ size, total });
 }

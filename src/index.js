@@ -12,6 +12,7 @@ import * as Settings from "./settings.js";
 import * as Reg from "./register.js";
 import * as Sds from "./sds.js";
 import * as Assess from "./assessments.js";
+import * as Places from "./places.js";
 import { handleImport } from "./import.js";
 import { handlePrecheck, handleUpload } from "./upload.js";
 import { handleGetAiSettings, handlePutAiSettings, handleTestAi } from "./ai.js";
@@ -50,13 +51,19 @@ const ROUTES = [
   ["PUT", `/api/chemicals/${ID}`, "admin", Reg.handleUpdateChemical],
   ["DELETE", `/api/chemicals/${ID}`, "admin", Reg.handleDeleteChemical],
   ["GET", `/api/chemicals/${ID}/history`, "user", Reg.handleHistory],
-  ["POST", `/api/chemicals/${ID}/locations`, "admin", Reg.handleAddLocation],
-  ["PUT", `/api/locations/${ID}`, "admin", Reg.handleUpdateLocation],
-  ["DELETE", `/api/locations/${ID}`, "admin", Reg.handleDeleteLocation],
   ["POST", `/api/chemicals/${ID}/link-sds`, "admin", Sds.handleLinkSds],
   ["POST", `/api/chemicals/${ID}/unlink-sds`, "admin", Sds.handleUnlinkSds],
   ["POST", `/api/chemicals/${ID}/assessments`, "admin", Assess.handleCreateAssessment],
-  ["GET", "/api/manifest", "user", Reg.handleManifest],
+  ["GET", "/api/manifest", "user", Places.handleManifest],
+  ["GET", "/api/pack", "user", Places.handlePack],
+  ["GET", "/api/places", "user", Places.handleListPlaces],
+  ["POST", "/api/places", "admin", Places.handleCreatePlace],
+  ["GET", `/api/places/${ID}`, "user", Places.handleGetPlace],
+  ["PUT", `/api/places/${ID}`, "admin", Places.handleUpdatePlace],
+  ["POST", `/api/places/${ID}/chemicals`, "admin", Places.handleAddChemicalToPlace],
+  ["POST", `/api/chemicals/${ID}/places`, "admin", Places.handleAddPlaceToChemical],
+  ["PUT", `/api/chemical-places/${ID}`, "admin", Places.handleUpdateLink],
+  ["DELETE", `/api/chemical-places/${ID}`, "admin", Places.handleDeleteLink],
   ["GET", "/api/export/all", "user", Reg.handleExportAll],
 
   ["GET", "/api/options", "user", Reg.handleListOptions],

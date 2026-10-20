@@ -7,7 +7,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pbkdf2Sync } from 'node:crypto';
 import { build } from '../scripts/make-demo.mjs';
-import { effective, derive, normaliseClassification, verifyClassification, computeSiteTotals, PICTOGRAM_CODES } from '../public/lib/ghs-ref.mjs';
+import { effective, derive, normaliseClassification, verifyClassification, computePlaceTotals, PICTOGRAM_CODES } from '../public/lib/ghs-ref.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TODAY = '2026-10-19';
@@ -106,8 +106,9 @@ test('summary columns match the current SDS, the current assessment and the GHS 
     WHERE c.risk_level IS NOT a.risk_level`);
   assert.deepEqual(badRisk, []);
   assert.deepEqual(all(db, 'SELECT chemical_id FROM assessments WHERE is_current = 1 GROUP BY chemical_id HAVING COUNT(*) > 1'), []);
-  const noCurrent = all(db, 'SELECT id, product_name FROM chemicals WHERE sds_id IS NOT NULL AND id NOT IN (SELECT chemical_id FROM assessments WHERE is_current = 1)');
-  assert.deepEqual(noCurrent, []);
+  // exactly one chemical (the soldering flux) has no assessment at all, so the job pack can show "no assessment on file"
+  const noCurrent = all(db, 'SELECT product_name FROM chemicals WHERE id NOT IN (SELECT chemical_id FROM assessments WHERE is_current = 1)');
+  assert.deepEqual(noCurrent.map(r => r.product_name), ['Wattlebird Soldering Flux Paste']);
 });
 
 test('classification: one unclassified, one decision override, one pictogram override (GHS09 only by override), one flagged', { skip }, () => {
@@ -169,36 +170,88 @@ test('SDS version history: v1 replaced by v2, chemical points at v2', { skip }, 
   assert.equal(one(db, 'SELECT COUNT(*) n FROM assessments WHERE sds_id = ? AND is_current = 0', v[0].id).n, 1);
 });
 
-test('site totals: exactly which items are over their placard and manifest quantities', { skip }, () => {
+test('places: counts, chemical_count matches the links, nothing in the legacy table', { skip }, () => {
   const db = openDb();
-  const entries = all(db, `SELECT l.id, l.chemical_id, c.product_name name, c.ghs_classification g, l.quantity, l.unit, l.location, l.spill_compound
-    FROM storage_locations l JOIN chemicals c ON c.id = l.chemical_id`).map(r => ({ id: r.id, chemical_id: r.chemical_id, name: r.name, classification: r.g === null ? null : JSON.parse(r.g), quantity: r.quantity, unit: r.unit, location: r.location, spill_compound: r.spill_compound }));
-  const t = computeSiteTotals(entries);
-  const item = n => t.items.find(i => i.item === n);
-  // (a) over the PLACARD quantity: item 1 on its own, and mixing item 9 only through the combination
-  assert.deepEqual(t.items.filter(i => i.placardOver).map(i => i.item), [1, 9]);
-  assert.deepEqual(t.items.filter(i => i.manifestOver).map(i => i.item), [], 'nothing over a manifest quantity');
-  assert.equal(item(1).total, 250);
-  // (b) mixing item 9: items 6, 7, 8 are each within their own placard quantity, the sum is not
-  assert.equal(item(6).total, 45); assert.equal(item(7).total, 64);
-  assert.ok(item(8).total > 900 && item(8).total <= 1000, 'item 8 ' + item(8).total);
-  assert.ok(!item(6).placardOver && !item(7).placardOver && !item(8).placardOver);
-  assert.equal(item(9).mixApplies.placard, true);
-  assert.ok(item(9).total > 1000 && item(9).total < 1100, 'item 9 ' + item(9).total);
-  // (c) category 4 decking oil in the same spill compound as category 3 stains counts as category 3 (item 8); the yard-shelf tin stays item 10
-  const deck8 = item(8).contributors.filter(c => /Decking Oil/.test(c.name));
-  assert.equal(deck8.length, 1);
-  assert.equal(item(10).total, 10);
-  assert.ok(item(10).contributors.length === 1 && /Decking Oil/.test(item(10).contributors[0].name));
-  // (d) one kg-versus-litre mismatch: the 9 kg LPG cylinder is not counted in item 1 (litres) and is reported
-  const mism = t.issues.filter(i => i.code === 'unit_mismatch');
-  assert.equal(mism.length, 1); assert.match(mism[0].name, /LPG/);
-  assert.equal(item(1).contributors.filter(c => c.counted === false).length, 1);
-  assert.equal(t.issues.filter(i => i.code === 'no_classification').length, 1);
-  // (e) everything else is comfortably under (at most a quarter of its placard quantity)
-  for (const i of t.items) if (![1, 6, 7, 8, 9].includes(i.item) && !i.isMix) assert.ok(i.total <= i.def.placard * 0.25, `item ${i.item} ${i.total}`);
-  assert.ok(t.items.filter(i => i.total > 0).length >= 10, 'a spread of items');
-  assert.equal(t.items.length, 43);
+  const places = all(db, 'SELECT * FROM places ORDER BY id');
+  assert.deepEqual(places.map(p => [p.id, p.name, p.place_type, p.registration, p.counts_toward_totals, p.archived]), [
+    [1, 'Tallowood workshop', 'workshop', null, 1, 0], [2, 'Harbour Road job site', 'site', null, 1, 0],
+    [3, 'Ute 1', 'vehicle', 'TWD 001', 0, 0], [4, 'Ute 2', 'vehicle', 'TWD 002', 0, 0], [5, 'Ute 3 (sold)', 'vehicle', 'TWD 003', 0, 1]]);
+  assert.ok(places[4].archived_at);
+  for (const p of places) assert.equal(p.chemical_count, one(db, 'SELECT COUNT(*) n FROM chemical_places WHERE place_id = ?', p.id).n, p.name);
+  assert.equal(one(db, 'SELECT COUNT(*) n FROM storage_locations').n, 0);
+  assert.equal(one(db, 'SELECT COUNT(*) n FROM chemical_places').n, summary.links);
+  assert.equal(summary.places, 5);
+  // a link has both quantity and unit or neither
+  assert.deepEqual(all(db, 'SELECT id FROM chemical_places WHERE (quantity IS NULL) != (unit IS NULL)'), []);
+  assert.ok(one(db, 'SELECT COUNT(*) n FROM chemical_places WHERE quantity IS NULL').n >= 3, 'some links have no quantity');
+  assert.ok(one(db, "SELECT COUNT(*) n FROM chemical_places WHERE spill_compound IS NOT NULL").n >= 10);
+  assert.deepEqual(all(db, 'SELECT chemical_id, place_id FROM chemical_places GROUP BY chemical_id, place_id HAVING COUNT(*) > 1'), []);
+  assert.deepEqual(all(db, 'PRAGMA foreign_key_check'), []);
+});
+
+test('every chemical is kept in at least one place; some in two or more; no links to nothing', { skip }, () => {
+  const db = openDb();
+  assert.deepEqual(all(db, 'SELECT id, product_name FROM chemicals WHERE id NOT IN (SELECT chemical_id FROM chemical_places)'), []);
+  assert.ok(one(db, 'SELECT COUNT(*) n FROM (SELECT chemical_id FROM chemical_places GROUP BY chemical_id HAVING COUNT(*) > 1)').n >= 15);
+  const per = Object.fromEntries(all(db, 'SELECT place_id, COUNT(*) n FROM chemical_places GROUP BY place_id').map(r => [r.place_id, r.n]));
+  assert.ok(per[1] > 50 && per[2] >= 8 && per[3] >= 10 && per[4] >= 10 && per[5] >= 1, JSON.stringify(per));
+});
+
+function placeResults(db) {
+  const places = all(db, 'SELECT * FROM places ORDER BY id');
+  const entries = all(db, `SELECT cp.id, cp.place_id, cp.chemical_id, c.product_name name, c.ghs_classification g, cp.quantity, cp.unit, cp.spill_compound
+    FROM chemical_places cp JOIN chemicals c ON c.id = cp.chemical_id WHERE cp.quantity IS NOT NULL`)
+    .map(r => ({ id: r.id, place_id: r.place_id, chemical_id: r.chemical_id, name: r.name, classification: r.g === null ? null : JSON.parse(r.g), quantity: r.quantity, unit: r.unit, spill_compound: r.spill_compound }));
+  return { places, entries, results: computePlaceTotals(places, entries) };
+}
+
+test('per-place totals: workshop NEAR, job site OVER, vehicles and the archived place count nothing', { skip }, () => {
+  const db = openDb();
+  const { results, places, entries } = placeResults(db);
+  const [w, s, u1, u2, arch] = results;
+  // vehicles and the archived place are not totalled
+  for (const r of [u1, u2, arch]) { assert.equal(r.counts, false); assert.equal(r.totals, null); }
+  assert.match(u1.note, /transport rules/); assert.match(u2.caveat, /not been confirmed/);
+  assert.equal(arch.note, 'This place is archived.');
+  // the workshop: near the placard quantity for items 8 and 9, over nothing
+  const item = (r, n) => r.totals.items.find(i => i.item === n);
+  assert.deepEqual(w.over, { placard: [], manifest: [] });
+  assert.deepEqual(w.near.placard, [8, 9]);
+  assert.equal(item(w, 6).total, 30); assert.equal(item(w, 7).total, 59);
+  assert.equal(item(w, 8).total, 854.6); assert.ok(item(w, 8).total >= 0.8 * 1000 && item(w, 8).total <= 1000);
+  assert.equal(item(w, 9).total, 943.6); assert.equal(item(w, 9).mixApplies.placard, true);
+  assert.equal(item(w, 1).total, 145); assert.equal(item(w, 10).total, 0, 'the workshop decking oil is counted with the category 3 liquids in its bund');
+  assert.ok(item(w, 8).contributors.some(c => /Decking Oil/.test(c.name) && c.rule === 'spill_compound'));
+  // the job site: over the placard quantity for item 1 (flammable gases), with a category 4 liquid in its own tray and a unit mismatch
+  assert.deepEqual(s.over, { placard: [1], manifest: [] });
+  assert.equal(item(s, 1).total, 210); assert.equal(item(s, 10).total, 10);
+  const mism = s.totals.issues.filter(i => i.code === 'unit_mismatch');
+  assert.equal(mism.length, 1); assert.match(mism[0].name, /Spray Enamel/);
+  assert.equal(s.totals.issues.filter(i => i.code === 'no_classification').length, 0);
+  assert.equal(w.totals.issues.filter(i => i.code === 'no_classification').length, 1, 'the unclassified two-stroke mix');
+  // nowhere is over a manifest quantity
+  for (const r of results) if (r.counts) assert.deepEqual(r.over.manifest, []);
+  // the vehicles hold enough that adding their stock to the workshop would go over (so the vehicle rule matters)
+  const vehicleEntries = entries.filter(e => [3, 4].includes(e.place_id)).map(e => ({ ...e, place_id: 1, spill_compound: e.spill_compound || 'vehicles' }));
+  const merged = computePlaceTotals(places.filter(p => p.id === 1), entries.filter(e => e.place_id === 1).concat(vehicleEntries))[0];
+  assert.ok(merged.over.placard.includes(8), 'item 8 would be over: ' + item(merged, 8).total);
+  assert.ok(item(merged, 8).total > 1000 && item(merged, 8).total < 1100);
+  // adding the archived ute as well changes nothing the other places already show
+  assert.ok(entries.some(e => e.place_id === 5), 'the archived place keeps its links');
+});
+
+test('sample job pack: Ute 2 has chemicals with no SDS and no assessment, and a stable link', { skip }, () => {
+  const db = openDb();
+  const ute2 = one(db, "SELECT id FROM places WHERE name = 'Ute 2'").id;
+  assert.equal(ute2, 4);
+  assert.equal(summary.sample_pack, '#/pack?place=4&client=Smith%20Street%20Primary%20School&ref=JOB-1042&date=' + TODAY);
+  const chems = all(db, `SELECT c.id, c.product_name, c.sds_id, (SELECT COUNT(*) FROM assessments a WHERE a.chemical_id = c.id AND a.is_current = 1) has_a
+    FROM chemical_places cp JOIN chemicals c ON c.id = cp.chemical_id WHERE cp.place_id = ?`, ute2);
+  assert.ok(chems.length >= 15);
+  assert.deepEqual(chems.filter(c => c.sds_id === null).map(c => c.product_name), ['Concrete Sealer (solvent-based, unlabelled tin)']);
+  assert.deepEqual(chems.filter(c => !c.has_a).map(c => c.product_name), ['Wattlebird Soldering Flux Paste']);
+  assert.deepEqual(summary.no_sds, [66]); assert.deepEqual(summary.no_assessment, [38]);
+  assert.ok(chems.some(c => c.sds_id !== null && c.has_a));
 });
 
 test('assessment controls resolve to seeded options', { skip }, () => {

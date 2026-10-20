@@ -1,5 +1,6 @@
 // One-time spreadsheet import. The browser parses and maps the columns; this validates and creates the rows.
 import { json, addYearsIso } from "./lib.js";
+import { PLACE_TYPES, defaultCountsTowardTotals } from "../public/lib/ghs-ref.mjs";
 import { bad, readJson, cleanStr, cleanEnum, cleanDate, PHYSICAL_FORMS, DECISIONS, buildSearchText, classificationStatements } from "./register.js";
 
 const MAX_ROWS = 2000;
@@ -36,11 +37,16 @@ function cleanRow(r) {
   };
   const hasSds = Object.values(sds).some(v => v);
   let loc = null;
-  const location = cleanStr(r.location, 200, "Location");
-  if (location) {
-    const q = r.quantity === undefined || r.quantity === null || r.quantity === "" ? 0 : Number(r.quantity);
-    if (!Number.isFinite(q) || q < 0 || q > 1e9) throw bad("Quantity must be a number from 0 up");
-    loc = { location, quantity: Math.round(q * 1000) / 1000, unit: normUnit(r.unit), container_note: cleanStr(r.container_note, 300, "Container note"), spill_compound: cleanStr(r.spill_compound, 200, "Spill compound") };
+  const place = cleanStr(r.place ?? r.location, 120, "Place");
+  if (place) {
+    const type = cleanEnum(r.place_type ? String(r.place_type).toLowerCase() : "workshop", PLACE_TYPES.map(t => t.id), "Place type");
+    let quantity = null, unit = null;
+    if (r.quantity !== undefined && r.quantity !== null && r.quantity !== "") {
+      const q = Number(r.quantity);
+      if (!Number.isFinite(q) || q < 0 || q > 1e9) throw bad("Quantity must be a number from 0 up");
+      quantity = Math.round(q * 1000) / 1000; unit = normUnit(r.unit);
+    }
+    loc = { place, place_type: type, quantity, unit, container_note: cleanStr(r.container_note, 300, "Container note"), spill_compound: cleanStr(r.spill_compound, 200, "Spill compound") };
   }
   return { chem, loc, sds: hasSds ? sds : null };
 }
@@ -67,19 +73,44 @@ export async function handleImport(c) {
     res.forEach((r, k) => r.results.forEach(row => existing.add(key(slice[k], row.supplier))));
   }
 
-  // Group rows: the first row for a product creates it, further rows for the same product add storage locations.
+  // Group rows: the first row for a product creates it, further rows for the same product add places.
   const groups = new Map();
   let skipped = 0;
   const skippedList = [];
   for (const p of parsed) {
     const k = key(p.chem.product_name, p.chem.supplier);
     if (existing.has(k)) { skipped++; skippedList.push({ row: p.i + 1, product_name: p.chem.product_name }); continue; }
-    const g = groups.get(k);
-    if (g) { if (p.loc) g.locs.push(p.loc); if (!g.sds && p.sds) g.sds = p.sds; } else groups.set(k, { chem: p.chem, sds: p.sds, locs: p.loc ? [p.loc] : [] });
+    const g = groups.get(k) || (groups.set(k, { chem: p.chem, sds: p.sds, links: new Map() }), groups.get(k));
+    if (!g.sds && p.sds) g.sds = p.sds;
+    if (!p.loc) continue;
+    const lk = `${p.loc.place_type}${p.loc.place.toLowerCase()}`;
+    const have = g.links.get(lk);
+    if (!have) g.links.set(lk, { ...p.loc });
+    else if (have.quantity === null || p.loc.quantity === null) { if (have.quantity === null) Object.assign(have, { quantity: p.loc.quantity, unit: p.loc.unit }); }
+    else if (have.unit === p.loc.unit) have.quantity = Math.round((have.quantity + p.loc.quantity) * 1000) / 1000;
+    else errors.push({ row: p.i + 1, error: `${p.chem.product_name} is listed at ${p.loc.place} in both litres and kilograms. Only the first quantity was kept.` });
   }
   const created = groups.size;
-  const locationsCreated = [...groups.values()].reduce((n, g) => n + g.locs.length, 0);
-  if (dry) return json({ dry_run: true, created, skipped, locations_created: locationsCreated, errors, skipped_rows: skippedList.slice(0, 200) });
+  const linksCreated = [...groups.values()].reduce((n, g) => n + g.links.size, 0);
+
+  // Places: find an active place of that type and name, or create it (counts toward totals by type default).
+  const wanted = new Map();
+  for (const g of groups.values()) for (const [lk, l] of g.links) wanted.set(lk, l);
+  const placeIds = new Map();
+  const wantedList = [...wanted.entries()];
+  for (let i = 0; i < wantedList.length; i += 50) {
+    const slice = wantedList.slice(i, i + 50);
+    const res = await env.DB.batch(slice.map(([, l]) => env.DB.prepare(
+      "SELECT id FROM places WHERE archived = 0 AND place_type = ? AND name = ? COLLATE NOCASE LIMIT 1").bind(l.place_type, l.place)));
+    res.forEach((r, k) => { if (r.results[0]) placeIds.set(slice[k][0], r.results[0].id); });
+  }
+  const placesToCreate = wantedList.filter(([lk]) => !placeIds.has(lk));
+  if (dry) return json({ dry_run: true, created, skipped, places_created: placesToCreate.length, links_created: linksCreated, locations_created: linksCreated, errors, skipped_rows: skippedList.slice(0, 200) });
+  for (const [lk, l] of placesToCreate) {
+    const r = await env.DB.prepare("INSERT INTO places (name, place_type, counts_toward_totals) VALUES (?, ?, ?)")
+      .bind(l.place, l.place_type, defaultCountsTowardTotals(l.place_type) ? 1 : 0).run();
+    placeIds.set(lk, r.meta.last_row_id);
+  }
 
   let stmts = [];
   const flush = async () => { if (stmts.length) { await env.DB.batch(stmts); stmts = []; } };
@@ -102,13 +133,19 @@ export async function handleImport(c) {
     // Not classified (ghs_classification NULL): the sheet's ADG class says nothing about the GHS category.
     // A decision column becomes the override; the effective decision follows it.
     stmts.push(...classificationStatements(env, "last", null, { overrides: { decision: f.decision_override, pictograms: null }, decisionBy: user.name }));
-    for (const l of g.locs) {
+    for (const [lk, l] of g.links) {
       stmts.push(env.DB.prepare(
-        "INSERT INTO storage_locations (chemical_id, location, spill_compound, quantity, unit, container_note) VALUES ((SELECT MAX(id) FROM chemicals), ?, ?, ?, ?, ?)"
-      ).bind(l.location, l.spill_compound, l.quantity, l.unit, l.container_note));
+        "INSERT INTO chemical_places (chemical_id, place_id, quantity, unit, container_note, spill_compound) VALUES ((SELECT MAX(id) FROM chemicals), ?, ?, ?, ?, ?)"
+      ).bind(placeIds.get(lk), l.quantity, l.unit, l.container_note, l.spill_compound));
     }
     if (stmts.length >= CHUNK_STATEMENTS) await flush();
   }
   await flush();
-  return json({ created, skipped, locations_created: locationsCreated, errors, skipped_rows: skippedList.slice(0, 200) });
+  // Keep the picker's chemical_count right for every place touched (one count per place, by idx_cp_place).
+  const touched = [...new Set(placeIds.values())];
+  for (let i = 0; i < touched.length; i += 50) {
+    await env.DB.batch(touched.slice(i, i + 50).map(id => env.DB.prepare(
+      "UPDATE places SET chemical_count = (SELECT COUNT(*) FROM chemical_places WHERE place_id = ?), updated_at = datetime('now') WHERE id = ?").bind(id, id)));
+  }
+  return json({ created, skipped, places_created: placesToCreate.length, links_created: linksCreated, locations_created: linksCreated, errors, skipped_rows: skippedList.slice(0, 200) });
 }

@@ -3,8 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   PICTOGRAMS, HAZARD_ROWS, PLACARD_ITEMS, H_STATEMENTS, derive, effective, extractHCodes, section2Text, verifyClassification,
-  normaliseClassification, itemsForClassification, computeSiteTotals, placardItem, rowsForHCodes, parsePictogramList, categoryAppearsInText,
-} from "../public/lib/ghs-ref.mjs";
+  normaliseClassification, itemsForClassification, computeSiteTotals, placardItem, rowsForHCodes, parsePictogramList, categoryAppearsInText, } from "../public/lib/ghs-ref.mjs";
 
 const c = (cls, k, extra = {}) => ({ c: cls, k, ...extra });
 const ent = (id, name, classification, quantity, unit = "L", location = "Store", extra = {}) => ({ id, chemical_id: id, name, classification, quantity, unit, location, ...extra });

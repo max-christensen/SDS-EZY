@@ -34,7 +34,7 @@ T("demo mode blocks every write for admin and user, reads still work", async () 
   for (const [email, password] of [["admin@test.example", "correct-horse-1"], ["user@test.example", "battery-staple-2"]]) {
     const s = await session(email, password);
     assert.equal(s.status, 200, `${email} login`);
-    for (const p of ["/api/review", "/api/chemicals", "/api/manifest", "/api/options"]) {
+    for (const p of ["/api/review", "/api/chemicals", "/api/manifest", "/api/options", "/api/places", "/api/pack?ids=1"]) {
       assert.equal((await call(s.cookie, "GET", p)).status, 200, p);
     }
     const fd = new FormData();
@@ -45,6 +45,8 @@ T("demo mode blocks every write for admin and user, reads still work", async () 
       ["POST", "/api/import", { rows: [] }], ["POST", "/api/options", { kind: "other", label: "x" }],
       ["POST", "/api/uploads/precheck", {}], ["POST", "/api/uploads", fd], ["POST", "/api/sds", {}], ["POST", "/api/setup", {}],
       ["PUT", "/api/settings/ai", {}],
+      ["POST", "/api/places", { name: "x" }], ["PUT", "/api/places/1", { name: "y" }], ["POST", "/api/places/1/chemicals", { chemical_id: 1 }],
+      ["POST", "/api/chemicals/1/places", { place_id: 1 }], ["PUT", "/api/chemical-places/1", { quantity: 1, unit: "L" }], ["DELETE", "/api/chemical-places/1"],
     ];
     for (const [m, p, b] of writes) {
       const r = await call(s.cookie, m, p, b);

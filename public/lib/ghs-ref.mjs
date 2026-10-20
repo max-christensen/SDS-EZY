@@ -553,6 +553,9 @@ export function itemsForClassification(classification) {
 
 // ------------------------------------------------------------------------------------------------ site totals
 
+/** How close counts as "near" a quantity: 80%. A reading aid for the screens, not part of Schedule 11. */
+export const NEAR_FRACTION = 0.8;
+
 const lc = (s) => String(s || "").trim().toLowerCase();
 
 /**
@@ -585,6 +588,13 @@ export function computeSiteTotals(entries) {
 
   const seenIssue = new Set();
   const issue = (e, code, message) => { const k = `${code}|${e.chemical_id}|${message}`; if (!seenIssue.has(k)) { seenIssue.add(k); issues.push({ code, message, chemical_id: e.chemical_id, name: e.name, location_id: e.id ?? null }); } };
+
+  // A chemical that falls under an item but has no quantity recorded makes the totals look lower than they are: say so.
+  for (const e of (entries || [])) {
+    if (e.quantity === null || e.quantity === undefined || e.quantity === "") {
+      if (itemsForClassification(e.classification).items.length) issue(e, "no_quantity", `${e.name}: no quantity is recorded here, so it is not in the totals.`);
+    }
+  }
 
   for (const e of list) {
     const q = Number(e.quantity), unit = e.unit === "kg" ? "kg" : "L";
@@ -634,6 +644,9 @@ export function computeSiteTotals(entries) {
       t.placardOver = t.counted > t.def.placard;
       t.manifestOver = t.counted > t.def.manifest;
     }
+    // "Near": at least NEAR_FRACTION of the quantity but not over it. A reading aid only; the table has no such threshold.
+    t.placardNear = (!t.isMix || t.mixApplies.placard) && !t.placardOver && t.counted > 0 && t.counted >= NEAR_FRACTION * t.def.placard;
+    t.manifestNear = (!t.isMix || t.mixApplies.manifest) && !t.manifestOver && t.counted > 0 && t.counted >= NEAR_FRACTION * t.def.manifest;
     t.totalL = round(t.totalL); t.totalKg = round(t.totalKg);
   }
   const out = [...totals.values()];
@@ -647,3 +660,44 @@ function contrib(e, q, unit, it) {
   return { location_id: e.id ?? null, chemical_id: e.chemical_id, name: e.name, location: e.location || "", quantity: q, unit, via: it.via, check: !!it.check, rule: it.rule || null };
 }
 function round(n) { return Math.round(n * 1000) / 1000; }
+
+// ------------------------------------------------------------------------------------------------ places
+
+export const PLACE_TYPES = [
+  { id: "workshop", label: "Workshop or depot", counts_default: true },
+  { id: "vehicle", label: "Vehicle", counts_default: false },
+  { id: "site", label: "Site", counts_default: true },
+];
+export function placeTypeLabel(id) { const t = PLACE_TYPES.find(x => x.id === id); return t ? t.label : String(id); }
+export function defaultCountsTowardTotals(type) { const t = PLACE_TYPES.find(x => x.id === type); return t ? t.counts_default : true; }
+
+/** Shown on a vehicle's page, on the manifest and in exports. OPEN POINT: not yet confirmed with Safe Work Australia or the regulator (docs/REFERENCE.md). */
+export const VEHICLE_TRANSPORT_NOTE = "Products in transit fall under the transport rules and are not counted here.";
+export const VEHICLE_TRANSPORT_CAVEAT = "This is our understanding and has not been confirmed with Safe Work Australia or your WHS regulator. Check with them.";
+
+/**
+ * Placard and manifest totals PER PLACE, never across the whole business.
+ *   places:  [{id, name, place_type, counts_toward_totals, archived}]
+ *   entries: [{place_id, id, chemical_id, name, classification, quantity, unit, spill_compound}] (one per chemical-place link)
+ * Returns one result per place: {place, counts, totals, over, near, note, caveat}. A place that does not count (a vehicle by default, an archived
+ * place, or one switched off) gets counts: false, no totals and, for a vehicle, the transport note. The flammable liquid category 4 spill
+ * compound rule works inside one place (a link's spill_compound, default the place).
+ */
+export function computePlaceTotals(places, entries) {
+  return (places || []).map(place => {
+    if (place.archived || !place.counts_toward_totals) {
+      return {
+        place, counts: false, totals: null, over: { placard: [], manifest: [] }, near: { placard: [], manifest: [] },
+        note: place.archived ? "This place is archived." : place.place_type === "vehicle" ? VEHICLE_TRANSPORT_NOTE : "This place is set not to count towards the placard and manifest totals.",
+        caveat: !place.archived && place.place_type === "vehicle" ? VEHICLE_TRANSPORT_CAVEAT : null,
+      };
+    }
+    const own = (entries || []).filter(e => String(e.place_id) === String(place.id)).map(e => ({ ...e, location: place.name }));
+    const totals = computeSiteTotals(own);
+    return {
+      place, counts: true, totals, over: totals.over,
+      near: { placard: totals.items.filter(i => i.placardNear).map(i => i.item), manifest: totals.items.filter(i => i.manifestNear).map(i => i.item) },
+      note: null, caveat: null,
+    };
+  });
+}

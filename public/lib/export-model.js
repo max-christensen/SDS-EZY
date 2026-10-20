@@ -65,10 +65,11 @@
   function normalise(data, today) {
     const t = today || todayIso();
     const locBy = new Map();
-    for (const l of data.locations || []) {
+    const placeName = new Map((data.places || []).map((x) => [Number(x.id), x]));
+    for (const l of data.links || []) {
       const k = Number(l.chemical_id);
       if (!locBy.has(k)) locBy.set(k, []);
-      locBy.get(k).push(l);
+      locBy.get(k).push(Object.assign({}, l, { place: placeName.get(Number(l.place_id)) || null }));
     }
     const asBy = new Map();
     for (const a of data.assessments || []) {
@@ -81,7 +82,7 @@
       const sdsId = c.sds_id != null ? Number(c.sds_id) : null;
       const row = Object.assign({}, c, { id, sds_id: sdsId });
       row.status = reviewStatus(row, t);
-      row.locations = locBy.get(id) || [];
+      row.links = locBy.get(id) || [];
       row.assessment = asBy.get(id) || null;
       row.pictogramList = s(c.pictograms).split(",").map((x) => x.trim().toUpperCase()).filter((x) => /^GHS0[1-9]$/.test(x));
       row.classification = parseClassification(c.classification !== undefined ? c.classification : c.ghs_classification);
@@ -104,12 +105,13 @@
       chemicals,
       byId: new Map(chemicals.map((c) => [c.id, c])),
       sdsFiles: (data.sds_files || []).map((f) => Object.assign({}, f, { sds_id: Number(f.sds_id), product_names: f.product_names || [] })),
-      locations: data.locations || [],
+      places: data.places || [],
+      links: data.links || [],
     };
   }
 
   function locationText(c) {
-    return (c.locations || []).map((l) => s(l.location) + (l.quantity ? " (" + (Math.round(Number(l.quantity) * 100) / 100) + " " + (s(l.unit) || "L") + ")" : "")).join("; ");
+    return (c.links || []).filter((l) => !(l.place && l.place.archived)).map((l) => (l.place ? s(l.place.name) + (l.place.registration ? " " + s(l.place.registration) : "") : "Unknown place") + (l.quantity != null && l.quantity !== "" ? " (" + (Math.round(Number(l.quantity) * 100) / 100) + " " + (s(l.unit) || "L") + ")" : "")).join("; ");
   }
 
   function fmtDate(iso) {

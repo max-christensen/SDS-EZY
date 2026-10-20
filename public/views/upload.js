@@ -10,6 +10,9 @@
     emergency_phone: 'Emergency phone', poison_schedule: 'Poison schedule', h_statements: 'Hazard statements', p_statements: 'Precautionary statements',
     cas_numbers: 'CAS numbers', classification: 'GHS classification', signal_word: 'Signal word', supplier: 'Supplier', title: 'Product name',
   };
+  const OFFLINE_TEXT = 'Uploading needs a signal. Connect and try again.';
+  const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
+  const myPlaceId = () => { try { const m = App.myPlace && App.myPlace(); return m ? String(m.id != null ? m.id : m) : ''; } catch (e) { return ''; } };
   const label = (k) => FIELD_LABELS[k] || String(k).replace(/_/g, ' ');
 
   const CSS = `
@@ -56,7 +59,7 @@
     if (st === 401) return 'Your session ended. Please log in again.';
     if (st === 403) return (err && err.message) || 'Uploading is not allowed right now.';
     if (st === 400) return (err && err.message) || 'That file could not be accepted. Make sure it is a PDF.';
-    if (st === 0) return err.message;
+    if (st === 0) return OFFLINE_TEXT;
     return (err && err.message) || 'Something went wrong. Please try again.';
   }
 
@@ -67,13 +70,19 @@
       let dead = false;
       App.onLeave(() => { dead = true; });
       const lib = await loadLibs();
-      const st = { file: null, buf: null, hash: '', text: '', scanned: false, pages: 0, pre: null, replaceId: null, maxMb: Number((App.settings && App.settings.upload_max_mb) || 15) };
+      const st = { placeId: myPlaceId(), places: [], file: null, buf: null, hash: '', text: '', scanned: false, pages: 0, pre: null, replaceId: null, maxMb: Number((App.settings && App.settings.upload_max_mb) || 15) };
+      try { const pl = await App.api('/places'); st.places = Array.isArray(pl) ? pl : []; } catch (e) { st.places = []; }
+      if (st.placeId && !st.places.some((x) => String(x.id) === st.placeId)) st.placeId = '';
+      const onNet = () => { const n = root.querySelector('#offNote'); if (n) n.hidden = !isOffline(); const b = root.querySelector('#qSubmit'); if (b) b.disabled = isOffline(); };
+      window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
+      App.onLeave(() => { window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet); });
 
       const topbar = '<div class="topbar"><div><h1>Upload a safety data sheet</h1><p class="sub">Add a PDF and SDS EZY will read it, add the chemical to the register and draft its risk assessment.</p></div></div>';
       const shell = (inner) => { root.innerHTML = topbar + inner; };
 
       function stepChoose(message) {
         shell(`${message ? `<div class="notice bad" role="alert">${App.esc(message)}</div>` : ''}
+          <div class="notice warn" id="offNote" role="alert"${isOffline() ? '' : ' hidden'}>${OFFLINE_TEXT}</div>
           <div class="card">
             <label class="up-drop" id="drop"><strong>Choose a PDF</strong><span class="muted">or drop it here. PDF files only, up to ${st.maxMb} MB.</span>
               <input type="file" id="file" accept="application/pdf,.pdf"></label>
@@ -184,6 +193,9 @@
           ${st.replaceId ? '<div class="notice">This will be added as the <strong>new version</strong> of the sheet you chose. The old version is kept in the history.</div>' : ''}
           ${ai && !ai.configured ? '<div class="notice warn">The assistant that drafts the assessment is not switched on, so this will be added as a draft with the PDF attached, for an admin to complete.</div>' : ''}
           <form class="card" id="qForm" novalidate>
+            <fieldset class="up-q"><legend><label for="qPlace" style="margin:0;color:inherit;font-size:inherit">Where is it kept?</label></legend>
+              <p class="hint">Pick the vehicle, workshop or site. You can leave it as not recorded.</p>
+              <select id="qPlace" style="min-height:48px;font-size:16px"><option value="">Not recorded</option>${st.places.map((x) => `<option value="${x.id}"${String(x.id) === st.placeId ? ' selected' : ''}>${App.esc(x.name)}${x.registration ? ' (' + App.esc(x.registration) + ')' : ''}</option>`).join('')}</select></fieldset>
             <h2>Five quick questions</h2>
             <p class="hint">The safety data sheet cannot tell us how <em>you</em> use the chemical. Your answers help draft the assessment. Pick the closest answer.</p>
             <fieldset class="up-q"><legend><label for="q1" style="margin:0;color:inherit;font-size:inherit">1. Where and how is it used?</label></legend>
@@ -198,7 +210,8 @@
             <fieldset class="up-q"><legend>5. How well ventilated is the area?</legend>
               ${radio('vent', [['outdoors', 'Outdoors or open air'], ['good', 'Good: open workshop, fans or extraction'], ['poor', 'Poor: small room, little airflow'], ['none_enclosed', 'None: enclosed space'], ['not_sure', 'Not sure']], a.ventilation || 'not_sure')}</fieldset>
             <p class="error-text" id="qErr" role="alert" hidden></p>
-            <div class="actions"><button class="primary up-submit" type="submit">Add to the register</button></div>
+            <div class="notice warn" id="offNote" role="alert"${isOffline() ? '' : ' hidden'}>${OFFLINE_TEXT}</div>
+            <div class="actions"><button class="primary up-submit" id="qSubmit" type="submit"${isOffline() ? ' disabled' : ''}>Add to the register</button></div>
           </form>`);
         root.querySelector('#change').addEventListener('click', () => stepChoose());
         root.querySelector('#qForm').addEventListener('submit', (e) => {
@@ -208,6 +221,8 @@
           if (!aero) { err.textContent = 'Please answer question 2: is it sprayed or turned into a mist?'; err.hidden = false; root.querySelector('input[name=aero]').focus(); return; }
           const amount = root.querySelector('#q3').value.trim();
           if (amount !== '' && !(Number(amount) >= 0)) { err.textContent = 'Please enter the amount as a number, or leave it empty.'; err.hidden = false; return; }
+          st.placeId = root.querySelector('#qPlace').value;
+          if (isOffline()) { err.textContent = OFFLINE_TEXT; err.hidden = false; return; }
           send({
             use_where_how: root.querySelector('#q1').value.trim(),
             aerosolised: aero.value,
@@ -221,20 +236,24 @@
       }
 
       async function send(answers) {
+        App.uploading = true;
         const fd = new FormData();
         fd.append('file', new File([st.buf], st.file.name, { type: 'application/pdf' }));
         fd.append('text', st.text);
         fd.append('answers', JSON.stringify(answers));
+        if (st.placeId) fd.append('place_id', st.placeId);
         if (st.replaceId) fd.append('replace_sds_id', String(st.replaceId));
         fd.append('request_id', (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()) + Math.random());
         stepBusy('Reading the sheet...', 'Sending the file...', null);
         const t1 = setTimeout(() => { if (!dead) { const h = root.querySelector('h2'); if (h) h.textContent = 'Drafting the assessment...'; setBusy('This can take up to a minute. Please keep this page open.'); } }, 3500);
         try {
           const res = await App.apiUpload('/uploads', fd);
+          App.uploading = false;
           clearTimeout(t1);
           if (!dead) stepResult(res);
         } catch (e) {
           clearTimeout(t1);
+          App.uploading = false;
           if (dead) return;
           stepQuestions(answers);
           const err = root.querySelector('#qErr');
@@ -282,6 +301,7 @@
         shell(`<div class="card" role="status"><h2>${App.esc(headline)}</h2><p>${App.esc(body)}</p>
           ${st.scanned ? '<div class="notice warn">The sheet had no readable text, so the entry is a draft for an admin to fill in.</div>' : ''}
           <h3 style="font-size:14px;margin:14px 0 4px">What was created</h3>
+          ${st.placeId ? `<p class="hint" style="margin:0 0 4px">Linked to the place: <strong>${App.esc((st.places.find((x) => String(x.id) === st.placeId) || {}).name || 'chosen place')}</strong>.</p>` : '<p class="hint" style="margin:0 0 4px">Where it is kept was not recorded.</p>'}
           <ul class="up-links">${links.length ? links.map((l) => `<li><a href="#/chemical/${l.id}">${App.esc(l.name)}</a>${classHtml(l.c)}</li>`).join('') : '<li>The safety data sheet was saved.</li>'}</ul>
           ${flat.length ? `<div class="notice warn" style="margin-top:14px"><strong>Please check these:</strong> ${flat.map((f) => `<span class="flag">${App.esc(label(f))}</span>`).join(' ')}<br><span class="hint">These were not found in the SDS text, so they were left blank rather than guessed.</span></div>` : ''}
           ${(res.warnings || []).length ? `<ul class="up-links">${res.warnings.map((w) => `<li>${App.esc(typeof w === 'string' ? w : w.message || '')}</li>`).join('')}</ul>` : ''}

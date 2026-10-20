@@ -13,15 +13,17 @@ let counter = 0;
 function newEnv(extra = {}) {
   const env = makeEnv(extra);
   env.DB.raw.exec("INSERT INTO users (id, name, email, password_hash, role) VALUES (1, 'Una User', 'una@example.com', 'x', 'user'), (2, 'Other', 'o@example.com', 'x', 'user')");
+  env.DB.raw.exec("INSERT INTO places (id, name, place_type) VALUES (1, 'Main workshop', 'workshop'); INSERT INTO places (id, name, place_type, archived) VALUES (2, 'Old yard', 'workshop', 1)");
   return env;
 }
 function pdfBytes(tag = "") { return new TextEncoder().encode(`%PDF-1.4\n% fake test pdf ${tag} ${++counter}\n%%EOF\n`); }
-function uploadReq({ bytes = pdfBytes(), name = "sheet.pdf", type = "application/pdf", text = solvent, answers = {}, replace } = {}) {
+function uploadReq({ bytes = pdfBytes(), name = "sheet.pdf", type = "application/pdf", text = solvent, answers = {}, replace, place } = {}) {
   const fd = new FormData();
   fd.append("file", new File([bytes], name, { type }));
   fd.append("text", text);
   fd.append("answers", JSON.stringify(answers));
   if (replace) fd.append("replace_sds_id", String(replace));
+  if (place !== undefined) fd.append("place_id", String(place));
   return new Request("http://x/api/uploads", { method: "POST", body: fd });
 }
 const sha = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
@@ -94,7 +96,7 @@ test("rate limit counts every attempt (even rejected ones) and is per login", as
 test("no AI configured: draft_only with the PDF stored, one chemical, blank assessment, friendly ai_error", async () => {
   const env = newEnv();
   const bytes = pdfBytes("a");
-  const res = await handleUpload(uploadReq({ bytes, name: "Karra Clean Solvent SDS v3.pdf", answers: { use_where_how: "wiping", quantity_amount: 5, quantity_unit: "L" } }), env, user);
+  const res = await handleUpload(uploadReq({ bytes, name: "Karra Clean Solvent SDS v3.pdf", answers: { use_where_how: "wiping", quantity_amount: 5, quantity_unit: "L" }, place: 1 }), env, user);
   const body = await res.json();
   assert.equal(res.status, 200, JSON.stringify(body));
   assert.equal(body.mode, "draft_only");
@@ -115,9 +117,11 @@ test("no AI configured: draft_only with the PDF stored, one chemical, blank asse
   assert.equal(a.source, "blank");
   assert.equal(a.risk_level, "uncertain");
   assert.equal(chem.risk_level, "uncertain");
-  const loc = q1(env, "SELECT * FROM storage_locations WHERE chemical_id = ?", chem.id);
-  assert.equal(loc.location, "Not yet set (from upload)");
+  const loc = q1(env, "SELECT * FROM chemical_places WHERE chemical_id = ?", chem.id);
+  assert.equal(loc.place_id, 1, "draft-only uploads still link to the chosen place");
   assert.equal(loc.quantity, 5);
+  assert.equal(loc.unit, "L");
+  assert.equal(q1(env, "SELECT chemical_count n FROM places WHERE id = 1").n, 1);
 });
 
 test("AI success: SDS, chemical, drafted assessment, decision, control links, verified fields", async () => {
@@ -166,7 +170,7 @@ test("AI success: SDS, chemical, drafted assessment, decision, control links, ve
   const labels = q(env, "SELECT o.label FROM assessment_controls c JOIN control_options o ON o.id = c.option_id WHERE c.assessment_id = ?", a.id).map(r => r.label).sort();
   assert.deepEqual(labels, ["Half-face respirator with suitable filter", "Lids kept on containers when not in use", "Local exhaust ventilation", "Safety glasses"]);
   assert.equal(q1(env, "SELECT COUNT(*) n FROM control_options").n, 24, "no option rows invented");
-  assert.equal(q1(env, "SELECT COUNT(*) n FROM storage_locations").n, 0, "no quantity, no location");
+  assert.equal(q1(env, "SELECT COUNT(*) n FROM chemical_places").n, 0, "no place chosen, no link");
   assert.ok(f.calls[0].body.messages[1].content.includes("Wiping tools"), "answers sent to the AI");
 });
 
@@ -175,14 +179,14 @@ test("multi-product SDS: four chemicals share one SDS, each gets an assessment, 
   await enableOpenAi(env);
   const f = withAi(env, plasterAi);
   let body;
-  try { body = await (await handleUpload(uploadReq({ text: plaster, answers: { quantity_amount: 40, quantity_unit: "kg", quantity_note: "8 x 5 kg bags", exposure: "1_to_4_hours", ventilation: "poor" } }), env, user)).json(); } finally { f.restore(); }
+  try { body = await (await handleUpload(uploadReq({ text: plaster, answers: { quantity_amount: 40, quantity_unit: "kg", quantity_note: "8 x 5 kg bags", exposure: "1_to_4_hours", ventilation: "poor" }, place: 1 }), env, user)).json(); } finally { f.restore(); }
   assert.equal(body.mode, "ai", JSON.stringify(body));
   assert.equal(body.chemical_ids.length, 4);
   assert.equal(body.assessment_ids.length, 4);
   assert.equal(q1(env, "SELECT COUNT(*) n FROM sds").n, 1);
   assert.equal(q1(env, "SELECT COUNT(DISTINCT sds_id) n FROM chemicals").n, 1);
   assert.equal(q1(env, "SELECT COUNT(DISTINCT chemical_id) n FROM assessments WHERE source = 'ai'").n, 4);
-  const locs = q(env, "SELECT * FROM storage_locations");
+  const locs = q(env, "SELECT * FROM chemical_places");
   assert.equal(locs.length, 1);
   assert.equal(locs[0].unit, "kg");
   assert.equal(locs[0].container_note, "8 x 5 kg bags");
@@ -311,7 +315,7 @@ test("a failed database write leaves nothing behind and removes the R2 object", 
   const body = await res.json();
   assert.ok(body.error && !/sqlite|UNIQUE|constraint/i.test(body.error));
   assert.equal(env.FILES.store.size, 0, "R2 object removed");
-  for (const t of ["sds", "chemicals", "assessments", "assessment_controls", "storage_locations"]) assert.equal(q1(env, `SELECT COUNT(*) n FROM ${t}`).n, 0, t);
+  for (const t of ["sds", "chemicals", "assessments", "assessment_controls", "chemical_places"]) assert.equal(q1(env, `SELECT COUNT(*) n FROM ${t}`).n, 0, t);
 });
 
 test("text is capped at 150,000 characters; AI input is trimmed to the provider budget", async () => {

@@ -28,15 +28,15 @@
     ],
     // One line per storage location. `items` = the placard items the product counts towards.
     rows: [
-      { key: "location", label: "Location", width: 14, get: (r) => clean(r.location) },
-      { key: "product", label: "Product", width: 18, get: (r) => clean(r.product_name) },
+      { key: "product", label: "Product", width: 20, get: (r) => clean(r.product_name) },
       { key: "un", label: "UN no.", width: 6, get: (r) => (clean(r.un_number) ? "UN " + clean(r.un_number).replace(/^UN\s*/i, "") : "") },
       { key: "class", label: "ADG class (illustration only)", width: 9, get: (r) => clean(r.dg_class) + (clean(r.subsidiary_class) ? " (" + clean(r.subsidiary_class) + ")" : "") },
       { key: "pg", label: "PG", width: 4, get: (r) => clean(r.packing_group) },
       { key: "hazchem", label: "Hazchem", width: 6, get: (r) => clean(r.hazchem_code) },
       { key: "psn", label: "Proper shipping name", width: 17, get: (r) => clean(r.proper_shipping_name) },
-      { key: "qty", label: "Quantity", width: 6, num: true, get: (r) => fmtNum(r.quantity), raw: (r) => Number(r.quantity) || 0 },
-      { key: "unit", label: "Unit", width: 4, get: (r) => clean(r.unit) || "L" },
+      { key: "qty", label: "Quantity", width: 6, num: true, get: (r) => (r.quantity == null || r.quantity === "" ? "not recorded" : fmtNum(r.quantity)), raw: (r) => (r.quantity == null || r.quantity === "" ? "" : Number(r.quantity) || 0) },
+      { key: "unit", label: "Unit", width: 4, get: (r) => (r.quantity == null || r.quantity === "" ? "" : clean(r.unit) || "L") },
+      { key: "note", label: "Container", width: 10, get: (r) => clean(r.container_note) },
       { key: "items", label: "Counts towards item", width: 9, get: (r) => itemsText(r) },
     ],
     // One line per placard item.
@@ -51,7 +51,7 @@
       { key: "mstatus", label: "Manifest", width: 7 },
       { key: "products", label: "Products counted", width: 23 },
     ],
-    emptyText: "No hazardous chemicals with a storage location yet.",
+    emptyText: "No hazardous chemicals are kept at this place yet.",
   };
 
   function itemsText(r) {
@@ -122,7 +122,7 @@
     const byItem = new Map((totals.items || []).map((t) => [t.item, t]));
     return (totals.items || []).map((t) => {
       const def = t.def;
-      let pstatus = t.placardOver ? "OVER" : "OK", mstatus = t.manifestOver ? "OVER" : "OK";
+      let pstatus = t.placardOver ? "OVER" : t.placardNear ? "NEAR" : "OK", mstatus = t.manifestOver ? "OVER" : t.manifestNear ? "NEAR" : "OK";
       const blocked = { placard: [], manifest: [] };
       if (t.isMix && t.mixApplies) {
         for (const n of def.mixOf) {
@@ -139,7 +139,8 @@
         item: def.item, def, isMix: !!t.isMix, title: itemTitle(def), phrase: itemPhrase(def), adg: clean(def.adg),
         placard: def.placard, manifest: def.manifest, unit: def.unit,
         total: t.total, totalText: totalText(t), pstatus, mstatus, pnote: note("placard"), mnote: note("manifest"),
-        placardOver: !!t.placardOver, manifestOver: !!t.manifestOver,
+        placardOver: !!t.placardOver, manifestOver: !!t.manifestOver, placardNear: !!t.placardNear, manifestNear: !!t.manifestNear,
+        pctPlacard: Math.round((t.total / def.placard) * 100), pctManifest: Math.round((t.total / def.manifest) * 100),
         mixParts: t.mixParts || null, contributors: t.contributors || [], hasStock: stock, notes: def.notes || [],
         productsText: productsText(t),
       };
@@ -169,7 +170,17 @@
     return out;
   }
 
-  // ---- inputs from the take-away export (used when the export has no manifest_totals)
+  // Amber "near" lines: at least 80% of the quantity but not over it (a reading aid; the table has no such threshold).
+  function nearBanners(model) {
+    const out = [];
+    for (const m of model) {
+      if (m.placardNear) out.push({ kind: "placard", item: m.item, text: "Near the placard quantity: Item " + m.item + " " + m.phrase + ": " + m.totalText + ", placard quantity " + fmtNum(m.placard) + " " + m.unit + " (" + m.pctPlacard + "%)" });
+      if (m.manifestNear) out.push({ kind: "manifest", item: m.item, text: "Near the manifest quantity: Item " + m.item + " " + m.phrase + ": " + m.totalText + ", manifest quantity " + fmtNum(m.manifest) + " " + m.unit + " (" + m.pctManifest + "%)" });
+    }
+    return out;
+  }
+
+  // ---- inputs from the take-away export (/api/export/all)
   function parseClass(v) {
     if (v == null || v === "") return null;
     if (Array.isArray(v)) return v;
@@ -177,36 +188,53 @@
   }
   // The export sends `classification` (parsed); older shapes sent `ghs_classification` (JSON text). Accept either.
   function classOf(c) { return parseClass(c.classification !== undefined ? c.classification : c.ghs_classification); }
+  const chemMap = (data) => { const m = new Map(); for (const c of data.chemicals || []) m.set(Number(c.chemical_id != null ? c.chemical_id : c.id), c); return m; };
+
+  // One entry per chemical-place link, for computePlaceTotals.
   function entriesFromExport(data) {
-    const chems = new Map();
-    for (const c of data.chemicals || []) chems.set(Number(c.chemical_id != null ? c.chemical_id : c.id), c);
+    const chems = chemMap(data);
     const out = [];
-    for (const l of data.locations || []) {
+    for (const l of data.links || []) {
       const c = chems.get(Number(l.chemical_id));
-      if (!c || !(Number(l.quantity) > 0)) continue;
-      out.push({ id: l.id, chemical_id: Number(l.chemical_id), name: c.product_name, classification: classOf(c), quantity: Number(l.quantity), unit: l.unit, location: l.location, spill_compound: l.spill_compound || null });
+      if (!c) continue;
+      out.push({ id: l.id, place_id: l.place_id, chemical_id: Number(l.chemical_id), name: c.product_name, classification: classOf(c), quantity: l.quantity == null ? 0 : Number(l.quantity), unit: l.unit, spill_compound: l.spill_compound || null });
     }
     return out;
   }
-  // Rows (one per storage location of a hazardous chemical) from the export, with the items each counts towards.
-  function rowsFromExport(data, ref) {
-    const chems = new Map();
-    for (const c of data.chemicals || []) chems.set(Number(c.chemical_id != null ? c.chemical_id : c.id), c);
+  // The per-place results: the export's place_totals if the server sent them, otherwise computePlaceTotals here (the same function).
+  function placeResults(data, ref) {
+    if (Array.isArray(data.place_totals) && data.place_totals.length) return data.place_totals;
+    return ref.computePlaceTotals(data.places || [], entriesFromExport(data));
+  }
+  // Rows (one per hazardous chemical kept in the place) with the items each counts towards.
+  function rowsForPlace(data, placeId, ref) {
+    const chems = chemMap(data);
     const rows = [];
-    for (const l of data.locations || []) {
+    for (const l of data.links || []) {
+      if (String(l.place_id) !== String(placeId)) continue;
       const c = chems.get(Number(l.chemical_id));
       if (!c || c.decision !== "hazardous") continue;
       const cl = classOf(c);
       rows.push({
-        location_id: l.id, chemical_id: Number(l.chemical_id), product_name: c.product_name, supplier: c.supplier, location: l.location,
+        link_id: l.id, chemical_id: Number(l.chemical_id), product_name: c.product_name, supplier: c.supplier,
         spill_compound: l.spill_compound, quantity: l.quantity, unit: l.unit, container_note: l.container_note, classification: cl,
         items: ref && cl ? ref.itemsForClassification(cl).items.map((i) => i.item).sort((a, b) => a - b) : [],
         dg_class: c.dg_class, subsidiary_class: c.subsidiary_class, un_number: c.un_number, packing_group: c.packing_group,
         hazchem_code: c.hazchem_code, proper_shipping_name: c.proper_shipping_name,
       });
     }
-    rows.sort((a, b) => clean(a.product_name).localeCompare(clean(b.product_name)) || clean(a.location).localeCompare(clean(b.location)));
+    rows.sort((a, b) => clean(a.product_name).localeCompare(clean(b.product_name)));
     return rows;
+  }
+  // Manifest-shaped sections from export data: {places:[{place,counts,totals,over,near,rows}], not_counted:[{place,note,caveat}]}.
+  function sectionsFromExport(data, ref) {
+    const places = [], notCounted = [];
+    for (const r of placeResults(data, ref)) {
+      if (r.place && r.place.archived) continue;
+      if (r.counts) places.push({ place: r.place, counts: true, totals: r.totals, over: r.over, near: r.near, rows: rowsForPlace(data, r.place.id, ref) });
+      else notCounted.push({ place: r.place, note: r.note, caveat: r.caveat });
+    }
+    return { places, not_counted: notCounted };
   }
 
   function headerFacts(company, generatedText, layout) {
@@ -231,28 +259,47 @@
     return { head: L.items.map((c) => c.label), body: list.map((m) => { const c = itemCells(m); return L.items.map((col) => c[col.key]); }) };
   }
 
-  // CSV: facts, the over banner lines, the items table (all items), the issues, then the rows table.
+  const PLACE_TYPE_TEXT = { workshop: "Workshop or depot", vehicle: "Vehicle", site: "Site" };
+  const placeTitle = (p) => clean(p.name) + " (" + (PLACE_TYPE_TEXT[p.place_type] || clean(p.place_type)) + (p.registration ? ", " + clean(p.registration) : "") + ")";
+
+  // Over / near lines across all counting places, naming the place: for the top of the manifest.
+  function summaryLines(manifest) {
+    const over = [], near = [];
+    for (const sec of manifest.places || []) {
+      const model = itemsModel(sec.totals);
+      const at = (t) => t.replace(":", " at " + sec.place.name + ":");
+      overBanners(model).forEach((b) => over.push({ kind: b.kind, place_id: sec.place.id, place: sec.place.name, text: at(b.text) }));
+      nearBanners(model).forEach((b) => near.push({ kind: b.kind, place_id: sec.place.id, place: sec.place.name, text: at(b.text) }));
+    }
+    return { over, near };
+  }
+
+  // CSV: facts, the over/near summary, then per counting place: items (all 43), issues, rows; then the places that do not count.
   function csvRows(manifest, company, ref, layout) {
     const L = layout || LAYOUT;
-    const model = itemsModel(manifest.totals);
     const out = [[L.title]];
     for (const f of headerFacts(company, manifest.generated_at || "", L)) out.push([f.label, f.value]);
     out.push([]);
-    const banners = overBanners(model);
-    banners.forEach((b) => out.push([b.text.toUpperCase()]));
-    if (banners.length) out.push([]);
-    const im = itemsMatrix(model, L);
-    out.push(im.head); im.body.forEach((r) => out.push(r));
-    out.push([]);
-    const groups = groupIssues(manifest.totals);
-    if (groups.length) {
-      out.push(["Issues"]);
-      groups.forEach((g) => g.entries.forEach((e) => out.push([g.title, e.message])));
+    const sm = summaryLines(manifest);
+    sm.over.forEach((b) => out.push([b.text.toUpperCase()]));
+    sm.near.forEach((b) => out.push([b.text]));
+    if (sm.over.length || sm.near.length) out.push([]);
+    for (const sec of manifest.places || []) {
+      out.push(["PLACE: " + placeTitle(sec.place)]);
+      const im = itemsMatrix(itemsModel(sec.totals), L);
+      out.push(im.head); im.body.forEach((r) => out.push(r));
+      out.push([]);
+      const groups = groupIssues(sec.totals);
+      if (groups.length) { out.push(["Things to check"]); groups.forEach((g) => g.entries.forEach((e) => out.push([g.title, e.message]))); out.push([]); }
+      const rm = rowsMatrix(sec.rows, L);
+      out.push(rm.head); rm.body.forEach((r) => out.push(r));
       out.push([]);
     }
-    const rm = rowsMatrix(manifest.rows, L);
-    out.push(rm.head); rm.body.forEach((r) => out.push(r));
-    out.push([]);
+    if ((manifest.not_counted || []).length) {
+      out.push(["Places that are not counted"]);
+      manifest.not_counted.forEach((n) => out.push([placeTitle(n.place), n.note, n.caveat || ""]));
+      out.push([]);
+    }
     out.push([ref ? ref.ADG_COLUMN_NOTE : ""]);
     out.push([SOURCE_LINE]);
     return out;
@@ -260,19 +307,19 @@
 
   // The choices made where the source documents are not clear, in plain words (the rules themselves live in ghs-ref.mjs; see docs/REFERENCE.md).
   const DECISIONS = [
-    "A product that falls under more than one item has its whole quantity counted in each of them, and a notice names the items. This can overstate a site's position; it never understates it.",
+    "A product that falls under more than one item has its whole quantity counted in each of them, and a notice names the items. This can overstate a place's position; it never understates it.",
     "Gases count under item 2 (acute toxicity), item 3 (skin corrosion) or item 1 (flammable gas), and only under item 4 if none of those apply. A category 4 acutely toxic gas is counted and flagged: check the LC50.",
     "Kilograms and litres are not converted (no density is held). A quantity in a unit the item does not use is not counted and is listed under the issues. Items given as \"kg or L\" add kilograms and litres as plain numbers.",
     "\"Over\" means strictly more than the quantity in the table.",
     "Mixing items apply only where none of the items they cover is over on its own. This is checked separately for the placard column and the manifest column. If one is already over, that item is the flag and the mixing item shows \"not applied\".",
-    "Each storage location can carry a spill compound name. Locations with the same name are one compound; if blank, the location is the compound.",
+    "Totals are worked out for each place on its own, never across the whole business. Each link can carry a spill compound name: links with the same name in one place are one compound; if blank, the place is the compound.",
     "Only liquids with a flash point up to 93 C are flammable liquids. Flash points are not held here; the classification is relied on.",
     "Explosives of Divisions 1.1 to 1.6, desensitised explosives, oxidising gases on their own and acute toxicity category 4 for liquids and solids have no item in the table. They are listed as issues, not counted.",
     "Where a category could not be told from the SDS text, it is marked \"category not confirmed\" and the item is flagged.",
   ];
 
   return {
-    LAYOUT, SOURCE_LINE, ISSUE_GROUPS, DECISIONS, fmtNum, itemsText, itemTitle, itemPhrase, itemsModel, overBanners, groupIssues,
-    entriesFromExport, rowsFromExport, headerFacts, rowsMatrix, itemsMatrix, itemCells, csvRows, parseClass, totalText, qtyText, unitText,
+    LAYOUT, SOURCE_LINE, ISSUE_GROUPS, DECISIONS, fmtNum, itemsText, itemTitle, itemPhrase, itemsModel, overBanners, nearBanners, groupIssues, summaryLines, placeTitle, PLACE_TYPE_TEXT,
+    entriesFromExport, placeResults, rowsForPlace, sectionsFromExport, headerFacts, rowsMatrix, itemsMatrix, itemCells, csvRows, parseClass, totalText, qtyText, unitText,
   };
 });

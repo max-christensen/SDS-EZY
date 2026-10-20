@@ -31,6 +31,8 @@
   App.settings = {};
   App.publicSettings = { company_name: '', has_logo: false, logo_version: '' };
 
+  App.OFFLINE_MESSAGE = "You're offline. This isn't saved on this phone.";
+  App.isOnline = () => navigator.onLine !== false;
   App.api = async function (path, opts = {}) {
     const init = { method: opts.method || 'GET', headers: {}, credentials: 'same-origin' };
     if (opts.body !== undefined && opts.body !== null) {
@@ -40,10 +42,15 @@
     const url = path.startsWith('/api/') ? path : '/api' + path;
     let res;
     try { res = await fetch(url, init); }
-    catch (e) { const err = new Error('Could not reach the server. Check your connection and try again.'); err.status = 0; throw err; }
+    catch (e) {
+      const offlineLike = !App.isOnline() || init.method !== 'GET';
+      const err = new Error(offlineLike ? App.OFFLINE_MESSAGE : 'Could not reach the server. Check your connection and try again.');
+      err.status = 0; err.offline = true; throw err;
+    }
     const ct = res.headers.get('content-type') || '';
     const data = ct.includes('json') ? await res.json().catch(() => ({})) : await res.text().catch(() => '');
     if (!res.ok) {
+      if (res.status === 503 && data && data.error === 'offline') { const e = new Error(App.OFFLINE_MESSAGE); e.status = 503; e.offline = true; throw e; }
       const err = new Error((data && data.error) || (res.status === 403 ? 'You are not allowed to do that.' : 'Something went wrong.'));
       err.status = res.status; err.data = data;
       if (res.status === 401 && App.me && !/^\/(login|setup|logout)/.test(path)) { App.me = null; showLogin('Your session ended. Please log in again.'); }
@@ -277,15 +284,103 @@
   App.refreshBranding = function () {
     applyTheme(App.publicSettings.main_color, App.publicSettings.accent_color);
     document.title = App.companyName();
-    $('appHeader').innerHTML = `<a href="#/review" style="text-decoration:none">${App.brandMarkHtml()}</a><button type="button" class="menu-btn" id="menuBtn" aria-expanded="false" aria-controls="sidebar">Menu</button>`;
+    $('appHeader').innerHTML = `<a class="brand-link" href="#/places" aria-label="${App.esc(App.companyName())}">${App.brandMarkHtml()}</a><a class="place-chip" id="placeChip" href="#/places"></a>`;
     $('loginBrand').innerHTML = App.brandMarkHtml();
-    $('menuBtn').addEventListener('click', () => toggleMenu());
+    renderChip();
   };
+  function renderChip() {
+    const el = $('placeChip'); if (!el) return;
+    const p = App.me ? readPlace() : null;
+    el.innerHTML = p && p.name
+      ? `<span class="chip-label">Place</span><strong>${App.esc(p.name)}</strong>${p.registration ? ` <span class="chip-reg">${App.esc(p.registration)}</span>` : ''}<span aria-hidden="true"> &#9662;</span>`
+      : `<strong>${p && p.id ? 'My place' : 'Choose a place'}</strong><span aria-hidden="true"> &#9662;</span>`;
+    el.setAttribute('aria-label', p && p.name ? 'Current place ' + p.name + '. Change place' : 'Choose a place');
+  }
   App.refreshSettings = async function () {
     App.publicSettings = await App.api('/public-settings');
     if (App.me) App.settings = await App.api('/settings');
     App.refreshBranding();
   };
+
+  // ---------------------------------------------------------------- my place (remembered on this phone, per signed-in person)
+  const placeKey = () => 'sdsezy.place.' + (App.me ? App.me.id : 'none');
+  function readPlace() {
+    try {
+      const raw = localStorage.getItem(placeKey()); if (!raw) return null;
+      const v = JSON.parse(raw);
+      if (v && typeof v === 'object' && v.id) return v;
+      if (typeof v === 'number') return { id: v };
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  App.myPlaceInfo = readPlace;
+  App.myPlace = () => { const p = readPlace(); return p ? p.id : null; };
+  App.setMyPlace = function (id, info) {
+    try {
+      if (id == null) localStorage.removeItem(placeKey());
+      else {
+        const old = readPlace();
+        const keep = old && String(old.id) === String(id) ? old : {};
+        localStorage.setItem(placeKey(), JSON.stringify(Object.assign({}, keep, { id: Number(id) }, info || {})));
+      }
+    } catch (e) { /* private mode: just not remembered */ }
+    if (App.me) { renderChip(); renderTabs(currentKey); }
+  };
+
+  // ---------------------------------------------------------------- sign-out hooks, install prompt, offline banner
+  const logoutHooks = [];
+  App.addLogoutHook = (fn) => { logoutHooks.push(fn); };
+  App.installPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); App.installPrompt = e; if (App.me && currentKey === 'more') route(); });
+  window.addEventListener('appinstalled', () => { App.installPrompt = null; });
+  App.install = async function () {
+    const p = App.installPrompt; if (!p) return;
+    p.prompt();
+    try { await p.userChoice; } catch (e) { /* ignore */ }
+    App.installPrompt = null;
+    if (currentKey === 'more') route();
+  };
+  App.isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone;
+  function syncOffline() { const b = $('offlineBanner'); if (b) b.hidden = App.isOnline(); document.body.classList.toggle('is-offline', !App.isOnline()); }
+  window.addEventListener('online', syncOffline);
+  window.addEventListener('offline', syncOffline);
+  // The service worker (sw.js) is built by another part of the app; if it is not there, nothing happens.
+  // A new service worker version waits until the person presses Update. Never reload mid-save or mid-upload.
+  App.isBusy = () => !!((App.offline && App.offline.busy) || App.uploading || App.busy);
+  let wantReload = false, reloaded = false;
+  function reloadWhenIdle() {
+    if (reloaded) return;
+    if (App.isBusy()) { setTimeout(reloadWhenIdle, 1000); return; }
+    reloaded = true; location.reload();
+  }
+  function showUpdateBar(reg) {
+    if (document.getElementById('updateBar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'updateBar'; bar.className = 'update-bar'; bar.setAttribute('role', 'status');
+    bar.innerHTML = '<span>A new version is ready.</span><button type="button" class="primary small">Update</button>';
+    document.body.appendChild(bar);
+    bar.querySelector('button').addEventListener('click', async (e) => {
+      if (App.isBusy()) { App.toast('Wait until the save or upload has finished, then press Update.', 'error'); return; }
+      e.target.disabled = true; e.target.textContent = 'Updating...';
+      wantReload = true;
+      try {
+        if (App.offline && typeof App.offline.applyUpdate === 'function') await App.offline.applyUpdate();
+        else if (reg && reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      } catch (err) { /* the controllerchange below still decides */ }
+    });
+  }
+  function watchRegistration(reg) {
+    if (!reg) return;
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdateBar(reg);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing; if (!w) return;
+      w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar(reg); });
+    });
+  }
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (wantReload) reloadWhenIdle(); });
+    window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').then(watchRegistration).catch(() => {}); });
+  }
 
   // ---------------------------------------------------------------- views and router
   const norm = (n) => String(n).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -299,10 +394,12 @@
   };
 
   const NAV = [
+    { href: '#/places', label: 'Places', key: 'places' },
     { href: '#/review', label: 'Review', key: 'review' },
     { href: '#/register', label: 'Register', key: 'register' },
     { href: '#/hazardous', label: 'Hazardous', key: 'hazardous' },
     { href: '#/manifest', label: 'Manifest', key: 'manifest' },
+    { href: '#/pack', label: 'Job pack', key: 'pack' },
     { href: '#/upload', label: 'Upload SDS', key: 'upload' },
     { href: '#/take-away', label: 'Take-away', key: 'takeaway' },
     { head: 'Admin', admin: true },
@@ -311,21 +408,54 @@
     { href: '#/users', label: 'Users', key: 'users', admin: true },
     { href: '#/settings', label: 'Settings', key: 'settings', admin: true },
   ];
+  let currentKey = '';
+  const myPlaceHref = () => { const id = App.myPlace(); return id ? '#/place/' + id : '#/places'; };
+  function tabFor(key) {
+    if (key === 'places' || key === 'place') return 'place';
+    if (key === 'register' || key === 'hazardous') return 'find';
+    if (key === 'pack') return 'pack';
+    return 'more';
+  }
+  function renderTabs(key) {
+    const t = tabFor(key);
+    const items = [['place', myPlaceHref(), 'My place', '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.800 12 21 12 21z"/><circle cx="12" cy="9.500" r="2.500"/>'],
+      ['find', '#/register', 'Find', '<circle cx="11" cy="11" r="6.500"/><path d="M16 16l5 5"/>'],
+      ['pack', '#/pack', 'Job pack', '<path d="M4 8h16v12H4zM9 8V5h6v3"/>'],
+      ['more', '#/more', 'More', '<path d="M4 7h16M4 12h16M4 17h16"/>']];
+    $('tabbar').innerHTML = items.map(([k, href, label, svg]) => `<a href="${href}" class="tab${k === t ? ' on' : ''}"${k === t ? ' aria-current="page"' : ''}><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${svg}</svg><span>${label}</span></a>`).join('');
+  }
+  function signOutHtml() { return `<div class="who"><div>${App.esc(App.me.name)} (${App.me.role})</div><button type="button" id="logoutBtn">Log out</button></div>`; }
   function renderNav(activeKey) {
+    currentKey = activeKey;
     const items = NAV.filter((n) => !n.admin || App.isAdmin());
     $('sidebar').innerHTML = items.map((n) => n.head
       ? `<div class="navhead">${n.head}</div>`
-      : `<a class="navlink" href="${n.href}"${n.key === activeKey ? ' aria-current="page"' : ''}>${n.label}</a>`).join('')
+      : `<a class="navlink" href="${n.href}"${n.key === activeKey || (n.key === 'places' && activeKey === 'place') ? ' aria-current="page"' : ''}>${n.label}</a>`).join('')
       + `<div class="navhead">Help</div><a class="navlink" href="help.html" target="_blank" rel="noopener">Help</a>`
-      + `<div class="who"><div>${App.esc(App.me.name)} (${App.me.role})</div><button type="button" id="logoutBtn">Log out</button></div>`;
-    $('logoutBtn').addEventListener('click', logout);
+      + signOutHtml();
+    const lb = $('sidebar').querySelector('#logoutBtn'); if (lb) lb.addEventListener('click', logout);
+    renderTabs(activeKey);
+    renderChip();
   }
-  function toggleMenu(force) {
-    const nav = $('sidebar');
-    const open = force === undefined ? !nav.classList.contains('open') : force;
-    nav.classList.toggle('open', open);
-    const b = $('menuBtn'); if (b) b.setAttribute('aria-expanded', String(open));
-  }
+
+  // The "More" screen: everything that does not fit in the bottom bar.
+  App.views.register('more', {
+    title: 'More',
+    render(root) {
+      const links = NAV.filter((n) => n.href && (!n.admin || App.isAdmin()) && !['places', 'pack', 'register'].includes(n.key));
+      const adminLinks = links.filter((n) => n.admin), main = links.filter((n) => !n.admin);
+      const row = (n) => `<li><a class="item" href="${n.href}"><span class="name">${n.label}</span><span aria-hidden="true">&rsaquo;</span></a></li>`;
+      root.innerHTML = `<div class="topbar"><h1>More</h1></div>
+        <section class="card"><ul class="rowlist"><li><a class="item" href="#/places"><span class="name">Change place</span><span aria-hidden="true">&rsaquo;</span></a></li>${main.map(row).join('')}<li><a class="item" href="help.html" target="_blank" rel="noopener"><span class="name">Help</span><span aria-hidden="true">&rsaquo;</span></a></li></ul></section>
+        ${adminLinks.length ? `<section class="card"><h2>Admin</h2><ul class="rowlist">${adminLinks.map(row).join('')}</ul></section>` : ''}
+        <section class="card">
+          ${App.installPrompt ? '<button type="button" class="primary big" id="installBtn">Install app on this phone</button>' : (App.isIos() ? '<p style="margin:0"><strong>Install on an iPhone or iPad.</strong> Tap the Share button, then Add to Home Screen.</p>' : '<p class="muted" style="margin:0">If your browser offers it, you can install this app to the home screen from its menu.</p>')}
+        </section>
+        <section class="card"><p class="muted" style="margin:0 0 10px">Signed in as ${App.esc(App.me.name)} (${App.me.role}).</p><button type="button" class="big" id="logoutBtn2">Sign out</button></section>`;
+      const ib = root.querySelector('#installBtn'); if (ib) ib.addEventListener('click', () => App.install());
+      root.querySelector('#logoutBtn2').addEventListener('click', logout);
+    },
+  });
 
   function parseHash() {
     const raw = location.hash.replace(/^#\/?/, '');
@@ -337,6 +467,11 @@
   }
   function resolve(segs, query) {
     if (!segs.length) return { view: 'review', key: 'review', params: { query } };
+    if (segs[0] === 'place' && segs[1]) {
+      const id = segs[1];
+      if (segs[2] === 'label') return { view: 'label', key: 'place', params: { id, place: true, kind: 'place', placeId: id, query } };
+      return { view: 'place', key: 'place', params: { id, edit: segs[2] === 'edit', query } };
+    }
     if (segs[0] === 'chemical' && segs[1]) {
       const id = segs[1];
       if (segs[2] === 'label') return { view: 'label', key: 'register', params: { id, query } };
@@ -349,7 +484,6 @@
   let routeToken = 0;
   async function route() {
     if (!App.me) return;
-    toggleMenu(false);
     const token = ++routeToken;
     runLeave();
     $('printArea').textContent = '';
@@ -459,7 +593,9 @@
     });
   }
   async function logout() {
-    try { await App.api('/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
+    // Hooks run first and are awaited; they still run (and sign-out still goes ahead) when the phone is offline.
+    for (const fn of logoutHooks) { try { await fn(); } catch (e) { console.error(e); } }
+    try { await App.api('/logout', { method: 'POST' }); } catch (e) { /* offline or failed: still sign out here */ }
     location.reload();
   }
 
@@ -480,6 +616,21 @@
     if (App.isAdmin() && App.settings.setup_complete === false && !h.segs.length && !App.publicSettings.demo) {
       history.replaceState(null, '', '#/welcome');
     }
+    if (!h.segs.length && !(App.isAdmin() && App.settings.setup_complete === false && !App.publicSettings.demo)) {
+      const mine = readPlace();
+      let target = '#/places?first=1';
+      if (mine) {
+        target = '#/place/' + mine.id; // keep it when we cannot check (offline)
+        try {
+          const active = await App.api('/places?archived=0');
+          const p = (Array.isArray(active) ? active : []).find((x) => String(x.id) === String(mine.id));
+          if (p) App.setMyPlace(p.id, { name: p.name, type: p.place_type, registration: p.registration });
+          else { App.setMyPlace(null); target = '#/places?first=1'; }
+        } catch (e) { /* offline: go to the remembered place */ }
+      }
+      history.replaceState(null, '', target);
+    }
+    syncOffline();
     await route();
   }
 

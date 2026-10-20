@@ -59,35 +59,61 @@ test("issues are grouped, none hidden, plain titles", () => {
   for (const i of totals.issues) assert.ok(g.find((x) => x.code === i.code).entries.some((e) => e.message === i.message));
 });
 
-test("export inputs: entries and rows from the take-away data", () => {
-  const data = {
-    chemicals: [
-      { id: 1, product_name: "Thinner", decision: "hazardous", ghs_classification: JSON.stringify([FL("2")]), dg_class: "3", un_number: "1263" },
-      { id: 2, product_name: "Soap", decision: "not_hazardous", ghs_classification: "[]" },
-      { id: 3, product_name: "New thing", decision: null, ghs_classification: null },
-    ],
-    locations: [{ id: 10, chemical_id: 1, location: "Shed", quantity: 20, unit: "L" }, { id: 11, chemical_id: 2, location: "Bay", quantity: 3, unit: "L" }, { id: 12, chemical_id: 3, location: "Bay", quantity: 3, unit: "L" }],
-  };
-  const entries = ML.entriesFromExport(data);
-  assert.equal(entries.length, 3);
-  assert.equal(entries[2].classification, null);
-  const rows = ML.rowsFromExport(data, ref);
-  assert.equal(rows.length, 1);
-  assert.deepEqual(rows[0].items, [7]);
-  assert.equal(ML.LAYOUT.rows.find((c) => c.key === "items").get(rows[0]), "Item 7");
-  assert.equal(ML.LAYOUT.rows.find((c) => c.key === "class").label, "ADG class (illustration only)");
-  const t = ref.computeSiteTotals(entries);
-  assert.ok(ML.groupIssues(t).some((g) => g.code === "no_classification"));
+const PL = (id, name, type = "workshop", counts = true, extra = {}) => ({ id, name, place_type: type, counts_toward_totals: counts, archived: false, ...extra });
+
+test("near banner (80% or more, not over) wording", () => {
+  const totals = ref.computeSiteTotals([E(1, "Thinner", [FL("2")], 220, "L", "Shed")]);
+  const model = ML.itemsModel(totals);
+  assert.equal(ML.overBanners(model).length, 0);
+  const n = ML.nearBanners(model);
+  assert.equal(n.length, 1);
+  assert.equal(n[0].text, "Near the placard quantity: Item 7 flammable liquids category 2: 220 L, placard quantity 250 L (88%)");
+  assert.equal(model.find((x) => x.item === 7).pstatus, "NEAR");
 });
 
-test("csv has banner, all items, issues, rows and the notes", () => {
-  const totals = ref.computeSiteTotals([E(1, "Thinner", [FL("2")], 320, "L", "Shed")]);
-  const csv = ML.csvRows({ rows: [{ product_name: "Thinner", location: "Shed", quantity: 320, unit: "L", items: [7] }], totals, generated_at: "x" }, { company_name: "Acme" }, ref);
+test("per place: the same product split over two places is not over at either, a vehicle is listed as not counted", () => {
+  const data = {
+    chemicals: [{ id: 1, product_name: "Thinner", decision: "hazardous", classification: [FL("2")] }],
+    places: [PL(1, "Main workshop"), PL(2, "Depot"), PL(3, "Ute", "vehicle", false, { registration: "ABC123" })],
+    links: [{ id: 1, place_id: 1, chemical_id: 1, quantity: 150, unit: "L" }, { id: 2, place_id: 2, chemical_id: 1, quantity: 150, unit: "L" }, { id: 3, place_id: 3, chemical_id: 1, quantity: 500, unit: "L" }],
+  };
+  const sec = ML.sectionsFromExport(data, ref);
+  assert.equal(sec.places.length, 2);
+  assert.equal(ML.summaryLines(sec).over.length, 0);
+  assert.equal(sec.not_counted.length, 1);
+  assert.equal(sec.not_counted[0].note, ref.VEHICLE_TRANSPORT_NOTE);
+  assert.equal(sec.not_counted[0].caveat, ref.VEHICLE_TRANSPORT_CAVEAT);
+  assert.equal(sec.places[0].rows.length, 1);
+  assert.deepEqual(sec.places[0].rows[0].items, [7]);
+  assert.equal(ML.placeTitle(sec.not_counted[0].place), "Ute (Vehicle, ABC123)");
+  // one place over names the place in the summary
+  data.links[0].quantity = 300;
+  const over = ML.summaryLines(ML.sectionsFromExport(data, ref)).over;
+  assert.equal(over.length, 1);
+  assert.equal(over[0].text, "Over the placard quantity at Main workshop: Item 7 flammable liquids category 2: 300 L, placard quantity 250 L");
+});
+
+test("the export's own place_totals are used when present", () => {
+  const fake = [{ place: PL(9, "Fake"), counts: true, totals: ref.computeSiteTotals([]), over: { placard: [], manifest: [] }, near: { placard: [], manifest: [] } }];
+  const sec = ML.sectionsFromExport({ chemicals: [], places: [], links: [], place_totals: fake }, ref);
+  assert.equal(sec.places[0].place.name, "Fake");
+});
+
+test("csv: per place blocks, not-counted notes, source line", () => {
+  const data = {
+    chemicals: [{ id: 1, product_name: "Thinner", decision: "hazardous", classification: [FL("2")], dg_class: "3" }],
+    places: [PL(1, "Main workshop"), PL(3, "Ute", "vehicle", false, { registration: "ABC123" })],
+    links: [{ id: 1, place_id: 1, chemical_id: 1, quantity: 300, unit: "L" }, { id: 3, place_id: 3, chemical_id: 1, quantity: 5, unit: "L" }],
+  };
+  const sec = ML.sectionsFromExport(data, ref);
+  const csv = ML.csvRows(Object.assign({ generated_at: "x" }, sec), { company_name: "Acme" }, ref);
   const flat = csv.map((r) => r.join("|"));
-  assert.ok(flat.some((l) => l.startsWith("OVER THE PLACARD QUANTITY: ITEM 7")));
+  assert.ok(flat.some((l) => l.startsWith("OVER THE PLACARD QUANTITY AT MAIN WORKSHOP")));
+  assert.ok(flat.some((l) => l === "PLACE: Main workshop (Workshop or depot)"));
   assert.equal(csv.filter((r) => /^\d+$/.test(r[0])).length, 43);
+  assert.ok(flat.some((l) => l.includes(ref.VEHICLE_TRANSPORT_NOTE)));
   assert.ok(flat.some((l) => l.includes("Safe Work Australia")));
-  assert.ok(flat.some((l) => l === ref.ADG_COLUMN_NOTE));
+  assert.ok(csv.some((r) => r[0] === "Thinner"));
 });
 
 test("export model parses classification, pictogram codes and overrides", () => {

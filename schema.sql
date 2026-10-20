@@ -126,19 +126,71 @@ CREATE INDEX IF NOT EXISTS idx_chem_review ON chemicals(review_due);
 CREATE INDEX IF NOT EXISTS idx_chem_decision ON chemicals(decision);
 CREATE INDEX IF NOT EXISTS idx_chem_risk ON chemicals(risk_level);
 
--- Storage locations: where a chemical is kept and how much. Quantities are totalled for each placard / manifest
--- item (Schedule 11, by GHS hazard class and category) across the site.
+-- Places: where chemicals are kept. A place is a workshop or depot, a vehicle, or a site. Vehicles can have a registration.
+-- Archiving hides a place from the active lists but keeps it (and its chemical links) on record.
+-- counts_toward_totals: whether the place counts towards the Schedule 11 placard and manifest totals. Defaults (set by the Worker
+-- when a place is created): on for workshops and sites, off for vehicles (products in transit fall under the transport rules;
+-- see docs/REFERENCE.md, open point). Totals are worked out PER place, never across the whole business.
+CREATE TABLE IF NOT EXISTS places (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  place_type TEXT NOT NULL DEFAULT 'workshop',   -- 'workshop' (workshop or depot) | 'vehicle' | 'site'
+  registration TEXT,                              -- vehicles: registration number
+  counts_toward_totals INTEGER NOT NULL DEFAULT 1,
+  archived INTEGER NOT NULL DEFAULT 0,
+  archived_at TEXT,
+  notes TEXT,
+  chemical_count INTEGER NOT NULL DEFAULT 0,      -- summary: number of chemical_places rows, kept in step by the Worker (so the place picker reads only this table)
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_places_list ON places(archived, place_type, name COLLATE NOCASE);
+
+-- A chemical is kept at one or more places, with an optional quantity (litres or kilograms). Chemicals are NOT tracked moving between places.
+CREATE TABLE IF NOT EXISTS chemical_places (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chemical_id INTEGER NOT NULL REFERENCES chemicals(id) ON DELETE CASCADE,
+  place_id INTEGER NOT NULL REFERENCES places(id),
+  quantity REAL,                                  -- NULL = not recorded
+  unit TEXT,                                      -- 'L' | 'kg' (NULL when quantity is NULL)
+  container_note TEXT,                            -- e.g. "4 x 5 L drums, left-hand cabinet"
+  spill_compound TEXT,                            -- optional: links in the same place with the same text share a spill compound (default: the place). Used by the flammable liquid category 4 rule
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (chemical_id, place_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cp_place ON chemical_places(place_id);
+
+-- LEGACY: the old single-workplace storage locations. Nothing writes here any more. The migration below copies every
+-- row into places / chemical_places and then empties the table, so running schema.sql again (every deploy) changes nothing.
 CREATE TABLE IF NOT EXISTS storage_locations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chemical_id INTEGER NOT NULL REFERENCES chemicals(id) ON DELETE CASCADE,
-  location TEXT NOT NULL,                 -- e.g. "Workshop - flammables cabinet 1"
+  location TEXT NOT NULL,
   quantity REAL NOT NULL DEFAULT 0,
-  unit TEXT NOT NULL DEFAULT 'L',         -- 'L' | 'kg'
-  container_note TEXT,                    -- e.g. "4 x 5 L drums"
-  spill_compound TEXT,                    -- optional: locations that share a spill compound use the same text (default: the location). Used by the flammable liquid category 4 rule
+  unit TEXT NOT NULL DEFAULT 'L',
+  container_note TEXT,
+  spill_compound TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_loc_chem ON storage_locations(chemical_id);
+
+-- MIGRATION, storage_locations -> places. Each distinct location name becomes a workshop-or-depot place that counts towards the totals
+-- (that is what a storage location was). Each (chemical, location) becomes one link. If the same chemical had the same location with two
+-- different units, only the first unit's row is kept (a link has one quantity); this was never a supported case. Safe to repeat:
+-- places are only created when missing, links use INSERT OR IGNORE, and the legacy rows are removed once copied.
+INSERT INTO places (name, place_type, counts_toward_totals)
+  SELECT d.name, 'workshop', 1
+  FROM (SELECT MIN(trim(location)) AS name FROM storage_locations WHERE trim(location) != '' GROUP BY lower(trim(location)) ORDER BY lower(trim(location))) d
+  WHERE NOT EXISTS (SELECT 1 FROM places p WHERE p.name = d.name COLLATE NOCASE AND p.place_type = 'workshop');
+INSERT OR IGNORE INTO chemical_places (chemical_id, place_id, quantity, unit, container_note, spill_compound)
+  SELECT l.chemical_id,
+         (SELECT p.id FROM places p WHERE p.name = trim(l.location) COLLATE NOCASE AND p.place_type = 'workshop' ORDER BY p.id LIMIT 1),
+         SUM(l.quantity), l.unit, group_concat(l.container_note, '; '), MAX(l.spill_compound)
+  FROM storage_locations l WHERE trim(l.location) != ''
+  GROUP BY l.chemical_id, lower(trim(l.location)), l.unit
+  ORDER BY MIN(l.id);
+UPDATE places SET chemical_count = (SELECT COUNT(*) FROM chemical_places cp WHERE cp.place_id = places.id)
+  WHERE EXISTS (SELECT 1 FROM chemical_places cp WHERE cp.place_id = places.id) OR chemical_count != 0;
+DELETE FROM storage_locations WHERE trim(location) != '';
 
 -- ---------------------------------------------------------------------------------------------
 -- Assessments: the one-page hazard risk assessment checklist. Linked to the chemical and the SDS
