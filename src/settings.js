@@ -26,6 +26,11 @@ export async function handleGetSettings(c) {
     twofa_enabled: s.twofa_enabled !== "0", resend_configured: !!env.RESEND_API_KEY,
     upload_max_mb: Math.min(25, Number(s.upload_max_mb) || 15),
     upload_rate_per_hour: Number(s.upload_rate_per_hour) || 10,
+    audit_reminder_days: Number(s.audit_reminder_days) || 90,
+    audit_photo_max_mb: Number(s.audit_photo_max_mb) || 2,
+    audit_max_photos: Number(s.audit_max_photos) || 50,
+    audit_max_total_mb: Number(s.audit_max_total_mb) || 40,
+    label_read_rate_per_hour: Number(s.label_read_rate_per_hour) || 30,
   };
   for (const k of COMPANY_FIELDS) out[k] = s[k] || "";
   return json(out);
@@ -58,6 +63,19 @@ export async function handleUpdateSettings(c) {
     if (!Number.isInteger(n) || n < 1 || n > 1000) throw bad("Uploads per hour must be a whole number from 1 to 1000");
     writes.push(["upload_rate_per_hour", String(n)]);
   }
+  const range = (key, label, lo, hi, whole) => {
+    if (b[key] === undefined) return;
+    const n = Number(b[key]);
+    if (b[key] === "" || b[key] === null || !Number.isFinite(n) || n < lo || n > hi || (whole && !Number.isInteger(n))) {
+      throw bad(`${label} must be ${whole ? "a whole number" : "a number"} from ${lo} to ${hi}`);
+    }
+    writes.push([key, String(n)]);
+  };
+  range("audit_reminder_days", "Audit reminder days", 1, 730, true);
+  range("audit_photo_max_mb", "Audit photo size (MB)", 0.2, 8, false);
+  range("audit_max_photos", "Photos per audit", 1, 200, true);
+  range("audit_max_total_mb", "Photo storage per audit (MB)", 5, 200, false);
+  range("label_read_rate_per_hour", "Label reads per hour", 1, 200, true);
   if (!writes.length) throw bad("Nothing to update");
   for (const [k, v] of writes) await saveSetting(c.env, k, v);
   return json({ ok: true });

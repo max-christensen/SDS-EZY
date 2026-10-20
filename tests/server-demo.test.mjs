@@ -34,7 +34,7 @@ T("demo mode blocks every write for admin and user, reads still work", async () 
   for (const [email, password] of [["admin@test.example", "correct-horse-1"], ["user@test.example", "battery-staple-2"]]) {
     const s = await session(email, password);
     assert.equal(s.status, 200, `${email} login`);
-    for (const p of ["/api/review", "/api/chemicals", "/api/manifest", "/api/options", "/api/places", "/api/pack?ids=1"]) {
+    for (const p of ["/api/review", "/api/chemicals", "/api/manifest", "/api/options", "/api/places", "/api/pack?ids=1", "/api/audits"]) {
       assert.equal((await call(s.cookie, "GET", p)).status, 200, p);
     }
     const fd = new FormData();
@@ -45,6 +45,10 @@ T("demo mode blocks every write for admin and user, reads still work", async () 
       ["POST", "/api/import", { rows: [] }], ["POST", "/api/options", { kind: "other", label: "x" }],
       ["POST", "/api/uploads/precheck", {}], ["POST", "/api/uploads", fd], ["POST", "/api/sds", {}], ["POST", "/api/setup", {}],
       ["PUT", "/api/settings/ai", {}],
+      ["POST", "/api/audits", { place_id: 1, client_id: "demo-client-0001" }], ["PUT", "/api/audits/1/items/1", { result: "present" }],
+      ["POST", "/api/audits/1/finish", {}], ["POST", "/api/audits/1/found", { client_id: "demo-client-0002", product_name: "x", action: "record" }],
+      ["POST", "/api/audits/1/disposals", { client_id: "demo-client-0003", description: "x", reason: "unknown" }], ["POST", "/api/audits/1/photos", {}],
+      ["POST", "/api/findings/1/accept"], ["PUT", "/api/disposals/1/close", { close_note: "x" }],
       ["POST", "/api/places", { name: "x" }], ["PUT", "/api/places/1", { name: "y" }], ["POST", "/api/places/1/chemicals", { chemical_id: 1 }],
       ["POST", "/api/chemicals/1/places", { place_id: 1 }], ["PUT", "/api/chemical-places/1", { quantity: 1, unit: "L" }], ["DELETE", "/api/chemical-places/1"],
     ];

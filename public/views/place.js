@@ -69,6 +69,23 @@
       ${admin ? `<div class="padmin no-print"><button type="button" class="small" data-chg="${c.link_id}">Change quantity</button><button type="button" class="small danger" data-rm="${c.link_id}">Remove from here</button></div>` : ''}</article>`;
   }
 
+  // ---- audits: last audited line, the audit button, and the history card
+  function auditBits(d, p) {
+    const last = d.last_audited_at || p.last_audited_at || null;
+    const audits = d.audits || p.audits || [];
+    const me = App.me || {};
+    const mineOpen = audits.find((a) => a.status === 'in_progress' && (a.started_by != null ? String(a.started_by) === String(me.id) : a.started_by_name === me.name));
+    const days = App.daysSince(last);
+    const lastLine = last
+      ? `Last audited ${esc(App.fmtDate(last))}${days != null ? ' (' + (days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago') + ')' : ''}`
+      : 'Never audited';
+    const top = p.archived ? '' : `<div class="no-print" style="margin:10px 0 0">
+        <p class="${last ? 'muted' : 'state-near'}" style="margin:0 0 8px;font-weight:600">${lastLine}</p>
+        ${mineOpen ? `<div class="notice warn" style="margin-bottom:8px">You already have an audit of this place in progress.</div><a class="btn primary big" href="#/audit/${mineOpen.id}">Continue your audit</a>` : `<a class="btn primary big" href="#/audit/new?place=${p.id}">Audit this place</a>`}</div>`;
+    const hist = `<section class="card no-print" id="auditHist"><h2>Audit history</h2>${audits.length ? `<ul class="rowlist">${audits.map((a) => `<li><a class="item" href="${App.auditHref ? App.auditHref(a) : '#/audit/' + a.id + (a.status === 'in_progress' ? '' : '/report')}"><span><span class="name">${esc(App.fmtDate(a.finished_at || a.started_at))}</span> ${a.status === 'in_progress' ? '<span class="badge due_soon">In progress</span>' : ''}<br><span class="sup">${esc(a.started_by_name || '')}${App.auditSummaryText && App.auditSummaryText(a.summary) ? ' &middot; ' + esc(App.auditSummaryText(a.summary)) : ''}</span></span><span aria-hidden="true">&rsaquo;</span></a></li>`).join('')}</ul>` : '<p class="muted" style="margin:0">No audits to show yet.</p>'}</section>`;
+    return { top, hist };
+  }
+
   App.views.register('place', {
     title: 'Place',
     async render(root, params) {
@@ -90,12 +107,14 @@
         document.title = p.name + ' - ' + App.companyName();
         const isMine = String(App.myPlace()) === String(p.id);
         if (isMine) App.setMyPlace(p.id, { name: p.name, type: p.place_type, registration: p.registration || '' });
+        const au = auditBits(d, p);
         root.innerHTML = `<a class="crumb no-print" href="#/places">&larr; Places</a>
           <div class="chem-head"><h1>${esc(p.name)}</h1>
             <div class="muted">${esc(G.placeTypeLabel(p.place_type))}${p.registration ? ' &middot; ' + esc(p.registration) : ''}${p.archived ? ' &middot; <strong>Archived</strong>' : ''}</div>
             ${p.notes ? `<p class="small-text" style="margin:6px 0 0">${esc(p.notes)}</p>` : ''}
             <div class="actions no-print" style="margin-top:10px">${isMine ? '<span class="badge ok">My place</span>' : (p.archived ? '' : '<button type="button" id="mineBtn">Make this my place</button>')}
               ${admin ? '<button type="button" id="editPlace">Edit place</button>' + (p.archived ? '' : '<button type="button" id="addChem" class="primary">Add a chemical</button>') + `<button type="button" class="${p.archived ? '' : 'danger'}" id="archPlace">${p.archived ? 'Unarchive' : 'Archive'}</button>` : ''}</div></div>
+          ${au.top}
           <section aria-labelledby="chemH" style="margin-top:14px"><h2 id="chemH" style="font-size:16px;margin:0 0 8px">Chemicals here <span class="muted" style="font-weight:400">(${chems.length})</span></h2>
             ${chems.length ? chems.map((c) => chemCard(c, admin)).join('') : `<div class="empty-state"><h2>Nothing is kept here yet</h2><p>${admin ? 'Add the chemicals that are kept in this place.' : 'An admin can link chemicals to this place.'}</p></div>`}
           </section>
@@ -103,6 +122,7 @@
           <section class="card no-print"><div class="btn-pair" style="margin-top:0">
             <a class="btn primary" href="#/pack?place=${p.id}">Build a job pack from this place</a>
             <a class="btn" href="#/place/${p.id}/label">Place QR label</a></div></section>
+          ${au.hist}
           <section class="card no-print" id="offCard" hidden></section>`;
         const q = (s) => root.querySelector(s);
         const mb = q('#mineBtn'); if (mb) mb.addEventListener('click', () => { App.setMyPlace(p.id, { name: p.name, type: p.place_type, registration: p.registration || '' }); App.toast('This is now your place.', 'ok'); draw(); drawOffline(); });

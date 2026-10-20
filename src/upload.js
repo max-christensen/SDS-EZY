@@ -223,11 +223,29 @@ export async function handleUpload(request, env, user) {
     catch (e) { return err(e && e.status === 400 && e.message ? e.message : "That place cannot be used.", 400); }
   }
 
+  // Optional: attach the sheet to an existing chemical without an SDS (the placeholder a found item in an audit creates).
+  let forChem = null;
+  const rawFor = form.get("for_chemical_id");
+  if (rawFor !== null && rawFor !== "") {
+    const n = Number(rawFor);
+    if (!Number.isInteger(n) || n < 1) return err("for_chemical_id is not valid.", 400);
+    if (replaceId) return err("Choose either a chemical to attach to or an SDS to replace, not both.", 400);
+    forChem = await env.DB.prepare(
+      "SELECT id, product_name, supplier, source, sds_id, ghs_classification, decision_override, pictograms_override FROM chemicals WHERE id = ?").bind(n).first();
+    if (!forChem) return err("That chemical was not found.", 404);
+    const allowed = forChem.sds_id == null && (user.role === "admin" || forChem.source === "audit");
+    if (!allowed) {
+      return err(user.role === "admin"
+        ? "That chemical already has a safety data sheet. Use \"newer version\" instead."
+        : "You can only add a sheet to an item found in an audit that has no sheet yet.", 403);
+    }
+  }
+
   // Store the PDF first; every later failure removes it again.
   const r2Key = `sds/${crypto.randomUUID()}.pdf`;
   await env.FILES.put(r2Key, buf, { httpMetadata: { contentType: "application/pdf" } });
   try {
-    return await processUpload(env, user, { settings, buf, r2Key, hash, fileName, text, answers, replaceId, placeId });
+    return await processUpload(env, user, { settings, buf, r2Key, hash, fileName, text, answers, replaceId, placeId, forChem });
   } catch (e) {
     try { await env.FILES.delete(r2Key); } catch { /* best effort */ }
     if (e && e.status && e.userMessage) return err(e.userMessage, e.status);
@@ -259,7 +277,7 @@ async function findTarget(env, replaceId, names, supplier) {
 }
 
 async function processUpload(env, user, ctx) {
-  const { settings, buf, r2Key, hash, fileName, text, answers, replaceId, placeId } = ctx;
+  const { settings, buf, r2Key, hash, fileName, text, answers, replaceId, placeId, forChem } = ctx;
   const db = env.DB;
   const today = todayIso();
   const { results: optRows } = await db.prepare("SELECT id, kind, label FROM control_options WHERE active = 1").all();
@@ -277,7 +295,7 @@ async function processUpload(env, user, ctx) {
   const sdsF = data ? data.sds : {};
   const supplier = sdsF.supplier || null;
 
-  const target = await findTarget(env, replaceId, products.map(p => p.product_name), supplier);
+  const target = forChem ? null : await findTarget(env, replaceId, products.map(p => p.product_name), supplier);
   let oldChems = [];
   if (target) {
     const { results } = await db.prepare("SELECT id, product_name, ghs_classification, decision_override, pictograms_override FROM chemicals WHERE sds_id = ? LIMIT 500").bind(target.id).all();
@@ -288,6 +306,7 @@ async function processUpload(env, user, ctx) {
     const c = oldChems.find(c => norm(c.product_name) === norm(p.product_name) && ![...matched.values()].includes(c.id));
     if (c && data) matched.set(i, c.id);
   });
+  if (forChem) matched.set(0, forChem.id); // product 0 is written onto the placeholder; no new chemical row for it
 
   let maxVersion = 0;
   if (target) {
@@ -339,6 +358,28 @@ async function processUpload(env, user, ctx) {
            updated_at = datetime('now') WHERE sds_id = ${ref.sql}`,
         eff.classification, eff.flags, eff.decision, eff.decision ? AI_DRAFT_LABEL : null, eff.decision ? decisionAt : null, eff.signal_word, eff.pictograms, ...ref.params);
     }
+  }
+
+  if (forChem) {
+    const rename = !!data && forChem.source === "audit"; // still the typed placeholder name: take the name and supplier from the SDS
+    const p0 = products[0];
+    const adminClass = parseJsonList(forChem.ghs_classification).some(e => e && e.src === "admin");
+    const setClass = eff.classification !== null && !adminClass;
+    if (eff.classification !== null && adminClass) warnings.push("The classification was not changed because an admin has edited it. Compare it with the new sheet.");
+    P(`UPDATE chemicals SET sds_id = ${ref.sql}, sds_issue_date = ?, review_due = ?, dg_class = ?, risk_level = ?,
+         ${rename ? "product_name = ?, supplier = COALESCE(?, supplier), synonyms = COALESCE(synonyms, ?), product_codes = COALESCE(product_codes, ?)," : ""}
+         use_description = COALESCE(use_description, ?), physical_form = COALESCE(physical_form, ?),
+         ${setClass ? `ghs_classification = ?, classification_flags = ?, signal_word = ?,
+           pictograms = CASE WHEN pictograms_override IS NULL THEN ? ELSE pictograms END,
+           decision_by = CASE WHEN decision_override IS NULL THEN ? ELSE decision_by END,
+           decision_at = CASE WHEN decision_override IS NULL THEN ? ELSE decision_at END,
+           decision = CASE WHEN decision_override IS NULL THEN ? ELSE decision END,` : ""}
+         updated_at = datetime('now') WHERE id = ?`,
+      ...ref.params, sdsF.issue_date || null, sdsF.review_due || null, sdsF.dg_class || null, data ? data.assessment.risk_level : "uncertain",
+      ...(rename ? [p0.product_name, supplier, p0.synonyms, p0.product_codes] : []),
+      p0.use_description, p0.physical_form || (data && data.assessment.form) || null,
+      ...(setClass ? [eff.classification, eff.flags, eff.signal_word, eff.pictograms, eff.decision ? AI_DRAFT_LABEL : null, eff.decision ? decisionAt : null, eff.decision] : []),
+      forChem.id);
   }
 
   const chemRef = (i) => matched.has(i)
@@ -394,7 +435,7 @@ async function processUpload(env, user, ctx) {
            SELECT a.id, ? FROM assessments a WHERE a.chemical_id = ${c.sql} AND a.is_current = 1 ORDER BY a.id DESC LIMIT 1`, oid, ...c.params);
       }
     });
-  } else if (!target) {
+  } else if (!target && !(forChem && (await db.prepare("SELECT id FROM assessments WHERE chemical_id = ? AND is_current = 1 LIMIT 1").bind(forChem.id).first()))) {
     const c = chemRef(0);
     P(`INSERT INTO assessments (chemical_id, sds_id, is_current, assessed_date, risk_level, assessed_by, source, answers, unverified, use_description, created_by)
        VALUES (${c.sql}, ${ref.sql}, 1, ?, 'uncertain', ?, 'blank', ?, ?, ?, ?)`,
@@ -404,6 +445,10 @@ async function processUpload(env, user, ctx) {
   // Place link (never storage_locations). The first NEW chemical was linked above, with the optional quantity (first product only, so it is not counted twice).
   // A new version also links the existing chemicals that are not linked to this place yet (never a duplicate).
   if (placeId) {
+    if (forChem) {
+      const have = await db.prepare("SELECT id FROM chemical_places WHERE chemical_id = ? AND place_id = ?").bind(forChem.id, placeId).first();
+      if (!have) stm.push(...linkChemicalToPlaceStatements(env, { chemicalId: forChem.id, placeId }));
+    }
     if (target && oldChems.length) {
       const { results: have } = await db.prepare("SELECT chemical_id FROM chemical_places WHERE place_id = ? LIMIT 5000").bind(placeId).all();
       const linked = new Set((have || []).map(r => r.chemical_id));
@@ -430,5 +475,6 @@ async function processUpload(env, user, ctx) {
     chemical_ids: chems.map(r => r.id), sds_id: sdsId, assessment_ids: asses.map(r => r.id), unverified, warnings,
   };
   if (aiError) out.ai_error = aiError;
+  if (forChem) out.attached_to = forChem.id;
   return json(out);
 }

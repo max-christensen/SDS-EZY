@@ -181,6 +181,8 @@ export const CHEMICALS = [
   { n: 'Tidewater Glass and Surface Cleaner', sds: 'glassclean', codes: 'TC-GSC-750', syn: 'Spray and wipe', use: 'Cleaning windows and benches', risk: 'n' },
   // ---- no SDS on file
   { n: 'Concrete Sealer (solvent-based, unlabelled tin)', sds: null, codes: '', syn: 'Masonry sealer', use: 'Sealing the yard slab (leftover tin, no SDS on file)', classification: 'admin', note: 'Classified by an admin from the can label until the SDS is obtained from the supplier.', risk: 'u' },
+  // found during the Ute 2 audit (scripts/demo/audits.mjs): a "needs an SDS" placeholder, no SDS, no classification, no assessment
+  { n: 'Rapidset Tile Adhesive (found on Ute 2, needs an SDS)', sds: null, supplier: 'Rapidset Pty Ltd', codes: '', syn: 'Tile adhesive', use: 'Found during an audit of Ute 2; use not yet recorded', unclassified: true, noAssessment: true, source: 'audit', created_days_ago: 3, risk: 'u' },
 ];
 
 export const USERS = [

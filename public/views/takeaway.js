@@ -47,6 +47,8 @@
       // One rule: the per-place totals the server sent (place_totals), otherwise computePlaceTotals here (the same function).
       const sections = L.manifestLayout.sectionsFromExport(raw, ref);
       const overList = L.manifestLayout.summaryLines(sections);
+      const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
+      const recentAudits = (model.audits || []).filter((a) => String(a.started_at || '') >= yearAgo).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
       const nChem = model.chemicals.length;
       const nHaz = model.chemicals.filter((c) => c.decision === 'hazardous').length;
       const sdsFiles = model.sdsFiles.filter((f) => f.has_file !== false && f.has_file !== 0);
@@ -62,7 +64,7 @@
         <div class="tk-grid">
           <section class="tk-card"><h2>Spreadsheet</h2><p>One Excel file with the register, hazardous chemicals, manifest, all 43 placard and manifest items, things to check, assessments and the SDS review list.</p><button class="primary" type="button" data-act="xlsx">Download spreadsheet</button></section>
           <section class="tk-card"><h2>One PDF to print or carry</h2><p>The whole register, then the manifest, then each assessment followed by its safety data sheet. An SDS shared by several products appears once, after the first assessment that uses it.${sdsFiles.length > 150 ? ' With this many sheets it can take several minutes and a lot of memory. The zip is lighter.' : ''}</p><button class="primary" type="button" data-act="pdf">Build the PDF</button></section>
-          <section class="tk-card"><h2>Zip of all the SDS PDFs</h2><p>Every safety data sheet as its own file, named after the product, with a README.</p><button class="primary" type="button" data-act="zip">Download zip</button></section>
+          <section class="tk-card"><h2>Zip of all the SDS PDFs</h2><p>Every safety data sheet as its own file, named after the product, with a README.</p>${recentAudits.length ? `<label class="inline" style="margin:4px 0"><input type="checkbox" id="tkAudits"> Include audit reports (with photos)</label><p class="hint" style="margin:0">${recentAudits.length} audit${recentAudits.length === 1 ? '' : 's'} from the last 12 months, each as a PDF with its photos in an audit-reports folder. Photos make the zip much larger and it takes longer to build.</p>` : ''}<button class="primary" type="button" data-act="zip">Download zip</button></section>
         </div>
         <div id="tkProgress" class="card" hidden role="status" aria-live="polite"><div id="tkTitle" style="font-weight:600"></div><div class="tk-bar"><i id="tkFill"></i></div><div class="tk-status" id="tkStatus"></div><div class="actions" style="margin-top:8px"><button type="button" class="small" id="tkCancel">Cancel</button></div></div>
         <div id="tkResult"></div>`}`;
@@ -89,6 +91,34 @@
         done('The spreadsheet has been downloaded.');
       }
 
+      // One audit report PDF per audit from the last 12 months (the same builder as the report page), into audit-reports/.
+      async function addAuditReports(zip, ZB, extra) {
+        await App.loadScript('/vendor/pdf-lib.min.js');
+        await App.loadScript('/lib/pdf-bundle.js');
+        await App.loadScript('/lib/audit-report.js');
+        const AR = L.auditReport;
+        let ok = 0; const failed = [];
+        for (let i = 0; i < recentAudits.length; i++) {
+          if (cancel) return;
+          const a = recentAudits[i];
+          const label = 'Audit ' + (i + 1) + ' of ' + recentAudits.length + ': ' + (a.place_name || '');
+          prog(label, i, recentAudits.length);
+          try {
+            const data = await App.api('/audits/' + Number(a.id));
+            const out = await AR.buildPdf(window.PDFLib, data, {
+              D: D(), company, preparedBy: (App.me && App.me.name) || '', cancelled: () => cancel,
+              fetchPhoto: async (pid) => { try { const r = await fetch('/api/audit-photos/' + Number(pid), { credentials: 'same-origin' }); return r.ok ? new Uint8Array(await r.arrayBuffer()) : null; } catch (e) { return null; } },
+              onProgress: (l) => prog(label, i, recentAudits.length) || (document.getElementById('tkStatus') && (document.getElementById('tkStatus').textContent = label + ' - ' + l)),
+            });
+            zip.addPdf('audit-reports/' + ZB.sanitiseFileName(AR.reportFileBase(data), 'Audit'), out.bytes);
+            ok++;
+          } catch (e) { if (e && e.message === 'cancelled') return; failed.push((a.place_name || 'audit') + ' ' + String(a.started_at || '').slice(0, 10)); }
+        }
+        extra.push('', 'Audit reports (with photos): ' + ok + ' PDF' + (ok === 1 ? '' : 's') + ' in the audit-reports folder, for audits from the last 12 months that were visible to ' + ((App.me && App.me.name) || 'the person who made this zip') + '.');
+        if (failed.length) { extra.push('Could not be built:'); failed.forEach((f) => extra.push('  - ' + f)); }
+        return { ok, failed };
+      }
+
       async function makeZip() {
         await App.loadScript('/vendor/fflate.js');
         await App.loadScript('/lib/zip-build.js');
@@ -113,11 +143,15 @@
         };
         await Promise.all([worker(), worker(), worker()]);
         void names;
+        const extra = [];
+        let auditRes = null;
+        const wantAudits = root.querySelector('#tkAudits') && root.querySelector('#tkAudits').checked;
+        if (!cancel && wantAudits) auditRes = await addAuditReports(zip, ZB, extra);
         if (cancel) { done('Cancelled. Nothing was downloaded.'); return; }
-        zip.addText('README.txt', ZB.readme(D().full, company.company_name, App.fmtDate(model.generated_at), saved, missing, L.manifestLayout.SOURCE_LINE));
+        zip.addText('README.txt', ZB.readme(D().full, company.company_name, App.fmtDate(model.generated_at), saved, missing, L.manifestLayout.SOURCE_LINE, extra));
         const blob = zip.finish();
         App.download('sds-ezy-safety-data-sheets-' + stamp() + '.zip', blob);
-        done(`The zip has been downloaded with ${saved} safety data sheet${saved === 1 ? '' : 's'}.` + (missing.length ? ` ${missing.length} could not be fetched: ${App.esc(missing.slice(0, 8).join(', '))}${missing.length > 8 ? ', and more' : ''}. They are listed in the README.` : ''), missing.length ? 'warn' : '');
+        done(`The zip has been downloaded with ${saved} safety data sheet${saved === 1 ? '' : 's'}${auditRes ? ` and ${auditRes.ok} audit report${auditRes.ok === 1 ? '' : 's'}${auditRes.failed.length ? ` (${auditRes.failed.length} could not be built)` : ''}` : ''}.` + (missing.length ? ` ${missing.length} could not be fetched: ${App.esc(missing.slice(0, 8).join(', '))}${missing.length > 8 ? ', and more' : ''}. They are listed in the README.` : ''), missing.length ? 'warn' : '');
       }
 
       async function makePdf() {

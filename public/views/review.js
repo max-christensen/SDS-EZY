@@ -22,13 +22,21 @@
       root.innerHTML = App.loadingHtml('Loading the review list...');
       const data = await App.api('/review');
       const counts = data.counts || {};
-      const total = SECTIONS.reduce((n, s) => n + (counts[s.key] || 0), 0);
+      const admin = App.isAdmin();
+      const days = (App.settings && App.settings.audit_reminder_days) || 90;
+      const notAudited = data.not_audited || [];
+      const nNotAudited = counts.not_audited != null ? counts.not_audited : notAudited.length;
+      const nFind = admin ? (counts.findings_open || 0) : 0, nDisp = admin ? (counts.disposals_open || 0) : 0;
+      if (admin) App.setBadges({ findings: nFind, disposals: nDisp });
+      const total = SECTIONS.reduce((n, s) => n + (counts[s.key] || 0), 0) + nNotAudited + nFind + nDisp;
       let html = `<div class="topbar"><div><h1>Review</h1><p class="sub">What needs attention${data.as_of ? ', as of ' + App.esc(App.fmtDate(data.as_of)) : ''}.</p></div></div>`;
       html += `<form class="find-form no-print" id="findForm" role="search"><label class="sr-only" for="findQ">Find a chemical</label><input type="search" id="findQ" placeholder="Find a chemical by name or supplier"><button class="primary" type="submit">Find</button></form>`;
-      html += `<div class="tiles">${SECTIONS.map((s) => {
+      html += `<div class="tiles wide">${SECTIONS.map((s) => {
         const n = counts[s.key] || 0;
         return `<a class="tile ${n ? s.cls : 'zero'}" href="#review-${s.key}" data-jump="${s.key}"><div class="num">${n}</div><div class="lbl">${s.tile}</div></a>`;
-      }).join('')}</div>`;
+      }).join('')}
+        <a class="tile ${nNotAudited ? 'warm' : 'zero'}" href="#review-not_audited" data-jump="not_audited"><div class="num">${nNotAudited}</div><div class="lbl">Not audited for ${days} days</div></a>
+        ${admin ? `<a class="tile ${nFind ? 'warm' : 'zero'}" href="#/findings"><div class="num">${nFind}</div><div class="lbl">Open findings</div></a><a class="tile ${nDisp ? 'hot' : 'zero'}" href="#/disposals"><div class="num">${nDisp}</div><div class="lbl">To dispose of</div></a>` : ''}</div>`;
 
       if (!total) {
         let registerCount = null;
@@ -45,6 +53,11 @@
           const n = counts[s.key] || list.length;
           html += `<section class="card" id="review-${s.key}" aria-labelledby="h-${s.key}"><h2 id="h-${s.key}">${s.title} <span class="count">(${n})</span></h2><p class="hint" style="margin:0 0 6px">${s.hint}</p><ul class="rowlist">${list.map((r) => rowHtml(r, s.key)).join('')}</ul>${n > list.length ? `<p class="hint">Showing the first ${list.length} of ${n}. Open the <a href="#/register">register</a> to see them all.</p>` : ''}</section>`;
         });
+      }
+      if (total) {
+        if (notAudited.length) {
+          html += `<section class="card" id="review-not_audited" aria-labelledby="h-not_audited"><h2 id="h-not_audited">Not audited for ${days} days <span class="count">(${nNotAudited})</span></h2><p class="hint" style="margin:0 0 6px">Places with chemicals that have never been audited, or not for ${days} days.</p><ul class="rowlist">${notAudited.map((p) => `<li><a class="item" href="#/place/${p.place_id}"><span><span class="name">${App.esc(p.name)}</span><br><span class="sup">${App.esc(App.GHS ? App.GHS.placeTypeLabel(p.place_type) : p.place_type)}${p.registration ? ' &middot; ' + App.esc(p.registration) : ''} &middot; ${p.last_audited_at ? 'Last audited ' + App.esc(App.fmtDate(p.last_audited_at)) : 'Never audited'}</span></span>${p.last_audited_at ? `<span class="badge overdue">${p.days != null ? p.days : App.daysSince(p.last_audited_at)} days</span>` : '<span class="badge overdue">Never</span>'}</a></li>`).join('')}</ul>${nNotAudited > notAudited.length ? `<p class="hint">Showing the first ${notAudited.length} of ${nNotAudited}.</p>` : ''}</section>`;
+        }
       }
       root.innerHTML = html;
       root.querySelector('#findForm').addEventListener('submit', (e) => {

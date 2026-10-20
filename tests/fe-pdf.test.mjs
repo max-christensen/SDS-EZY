@@ -60,6 +60,13 @@ const data = {
     { chemical_id: 1, assessed_date: "2026-10-01", assessed_by: "Prepared from the SDS (AI draft)", risk_level: "significant_controlled", route_inhalation: 1, route_ingestion: 0, route_absorption: 1, controls: [{ kind: "ppe", label: "Safety glasses" }, { kind: "ventilation", label: "Fume cupboard" }], fire_response: "Use foam. ".repeat(60), unverified: '["hazchem_code"]' },
   ],
   sds_files: [],
+  audits: [{ id: 7, place_id: 1, place_name: "Main workshop", place_type: "workshop", started_by_name: "Test User", started_at: "2026-10-20T12:00:00Z", finished_at: "2026-10-20T12:40:00Z", status: "finished", summary: JSON.stringify({ listed: 3, present: 1, not_found: 1, changed: 1, not_marked: 0, found: 1, disposals: 1, photos: 2, photo_bytes: 2097152 }) },
+    { id: 8, place_id: 2, place_name: "Ute", place_type: "vehicle", place_registration: "ABC123", started_by_name: "Test Admin", started_at: "2026-10-21T01:00:00Z", status: "in_progress", summary: null }],
+  audit_items: [{ audit_id: 7, chemical_id: 1, product_name: "Thinner", result: "changed", new_quantity: 10, new_unit: "L", expected_quantity: 20, expected_unit: "L", review_status: "overdue", has_sds: 1, has_assessment: 1 }, { audit_id: 8, chemical_id: 1, product_name: "Thinner", result: null }],
+  audit_found: [{ audit_id: 7, client_id: "f1", product_name: "Mystery Spray", source: "ai", outcome: "created", found_at: "2026-10-20T12:20:00Z" }],
+  audit_disposals: [{ audit_id: 7, client_id: "d1", place_name: "Main workshop", description: "Old can", reason: "damaged", status: "to_dispose", flagged_by_name: "Test User", flagged_at: "2026-10-20T12:30:00Z" }],
+  audit_findings: [{ audit_id: 7, kind: "changed", place_name: "Main workshop", product_name: "Thinner", status: "open" }],
+  audit_photos: [],
 };
 
 test("sanitise keeps text the standard fonts can draw", () => {
@@ -77,6 +84,13 @@ test("bundle: cover, register, manifest, assessments, SDS once", async () => {
   });
   assert.deepEqual(fetched, [11, 10]);
   assert.deepEqual(res.notes.missing, ["Missing file product"]);
+  {
+    const pdfjs0 = await import(pathToFileURL(process.cwd() + "/node_modules/pdfjs-dist/legacy/build/pdf.mjs").href);
+    const d0 = await pdfjs0.getDocument({ data: new Uint8Array(res.bytes), verbosity: 0 }).promise;
+    let ah = "";
+    for (let i = 1; i <= d0.numPages; i++) { const t = (await (await d0.getPage(i)).getTextContent()).items.map((x) => x.str).join(" "); if (t.includes("Audit history")) ah += t; }
+    assert.ok(ah.includes("Main workshop") && ah.includes("Ute (ABC123)") && ah.includes("In progress"), "Audit history section");
+  }
   const out = await PDFLib.PDFDocument.load(res.bytes);
   assert.equal(out.getPageCount(), res.pageCount);
   assert.ok(res.pageCount >= 1 + 1 + 1 + 4 + 3, "pages " + res.pageCount);
@@ -88,10 +102,10 @@ test("xlsx sheets are built and round trip through the vendored writer/reader", 
   const model = EM.normalise(data, "2026-10-19");
   const sections = ML.sectionsFromExport(data, ref);
   const sheets = XB.buildSheets(model, D, { ref, sections });
-  assert.deepEqual(sheets.map((s) => s.sheet), ["Register", "Hazardous", "Places", "Place links", "Manifest", "Placard and manifest", "Issues", "Assessments", "Review due"]);
+  assert.deepEqual(sheets.map((s) => s.sheet), ["Register", "Hazardous", "Places", "Place links", "Manifest", "Placard and manifest", "Issues", "Assessments", "Review due", "Audits", "Audit items", "Found items", "Disposals", "Findings"]);
   const blob = await writeXlsx(sheets).toBlob();
   const read = await readXlsx(blob);
-  assert.equal(read.length, 9);
+  assert.equal(read.length, 14);
   for (const s of read) assert.ok(s.data.some((row) => row.includes(D.short)), s.sheet + " has the disclaimer");
   for (const sh of read) assert.ok(sh.data.some((row) => row.some((c) => /Safe Work Australia/.test(String(c)))), sh.sheet + " has the source line");
   const man = read.find((s) => s.sheet === "Manifest").data;
@@ -112,6 +126,14 @@ test("xlsx sheets are built and round trip through the vendored writer/reader", 
   assert.ok(read.find((s) => s.sheet === "Issues").data.flat().some((c) => /No GHS classification/.test(String(c))));
   const reg = read.find((s) => s.sheet === "Register").data;
   assert.ok(reg.flat().includes("GHS02 Flame; GHS07 Exclamation mark"));
+  const au = read.find((s) => s.sheet === "Audits").data;
+  assert.ok(au.some((r) => r[0] === 7 && r[1] === "Main workshop" && r[4] === "Finished" && r[8] === 3 && r[10] === 1 && r[16] === 2), "audit 7 counts come from the summary");
+  assert.ok(au.some((r) => r[0] === 8 && r[4] === "In progress, not finished" && r[8] === 1), "audit 8 counts are worked out from its items");
+  const ai = read.find((s) => s.sheet === "Audit items").data;
+  assert.ok(ai.some((r) => r[0] === 7 && r[2] === "Thinner" && r[4] === "Changed" && r[8] === 10));
+  assert.ok(read.find((s) => s.sheet === "Found items").data.flat().includes("Added to the register (needs an SDS)"));
+  assert.ok(read.find((s) => s.sheet === "Disposals").data.flat().includes("Old can"));
+  assert.ok(read.find((s) => s.sheet === "Findings").data.flat().includes("Changed: update quantity or container"));
   const rev = read.find((s) => s.sheet === "Review due").data;
   assert.ok(rev.flat().includes("Overdue"));
 });

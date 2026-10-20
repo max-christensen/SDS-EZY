@@ -48,6 +48,17 @@
             <div><label for="sRate">Uploads each person can make per hour</label><input type="number" id="sRate" min="1" max="200" value="${esc(c.upload_rate_per_hour || 10)}"></div></div>
             <p class="hint">The biggest file allowed is 25 MB. Only PDF files are accepted.</p>
           </section>
+          <section class="card settings-card"><h2>Audits</h2>
+            <p class="hint" style="margin:0 0 6px">Limits for audits and their photos. Photos are shrunk on the phone before they are sent.</p>
+            <label for="sRemind">Remind me when a place has not been audited for (days)</label><input type="number" id="sRemind" min="1" max="730" step="1" value="${esc(c.audit_reminder_days || 90)}">
+            <p class="hint">From 1 to 730 days. Places that are overdue show on the Review list.</p>
+            <div class="row2"><div><label for="sPhotoMb">Biggest photo (MB)</label><input type="number" id="sPhotoMb" min="0.2" max="8" step="0.1" value="${esc(c.audit_photo_max_mb || 2)}"></div>
+            <div><label for="sPhotoN">Most photos in one audit</label><input type="number" id="sPhotoN" min="1" max="200" step="1" value="${esc(c.audit_max_photos || 50)}"></div></div>
+            <p class="hint">Photo size from 0.2 to 8 MB. Photos per audit from 1 to 200.</p>
+            <div class="row2"><div><label for="sTotalMb">Most photo storage in one audit (MB)</label><input type="number" id="sTotalMb" min="5" max="200" step="1" value="${esc(c.audit_max_total_mb || 40)}"></div>
+            <div><label for="sLabelRate">Label photo reads per person per hour</label><input type="number" id="sLabelRate" min="1" max="200" step="1" value="${esc(c.label_read_rate_per_hour || 30)}"></div></div>
+            <p class="hint">Total per audit from 5 to 200 MB. Label reads from 1 to 200 an hour.</p>
+          </section>
           <section class="card settings-card"><h2>Sign-in security</h2>
             <label class="inline"><input type="checkbox" id="sTwofa"${c.twofa_enabled !== false ? ' checked' : ''}${c.resend_configured ? '' : ' disabled'}> Ask for an emailed 6-digit code when logging in</label>
             <p class="hint" id="twofaStatus">${c.resend_configured
@@ -100,6 +111,11 @@
             main_color: $('#sMain').value, accent_color: $('#sAccent').value,
             upload_max_mb: Math.min(25, Math.max(1, Number($('#sMaxMb').value) || 15)),
             upload_rate_per_hour: Math.max(1, Number($('#sRate').value) || 10),
+            audit_reminder_days: Math.min(730, Math.max(1, Math.round(Number($('#sRemind').value) || 90))),
+            audit_photo_max_mb: Math.min(8, Math.max(0.2, Number($('#sPhotoMb').value) || 2)),
+            audit_max_photos: Math.min(200, Math.max(1, Math.round(Number($('#sPhotoN').value) || 50))),
+            audit_max_total_mb: Math.min(200, Math.max(5, Number($('#sTotalMb').value) || 40)),
+            label_read_rate_per_hour: Math.min(200, Math.max(1, Math.round(Number($('#sLabelRate').value) || 30))),
             setup_complete: true,
           };
           if (c.resend_configured) body.twofa_enabled = $('#sTwofa').checked;
@@ -126,6 +142,11 @@
       });
 
       // ---- AI
+      // The server says whether the chosen model takes images; accept the likely field names.
+      function visionState(a) {
+        const v = a.vision && a.vision.supports_images != null ? a.vision.supports_images : null;
+        return v === true ? 'Yes' : v === false ? 'No. People will need to type the name and supplier.' : '<span class="none">Not known. Press Test photo reading.</span>';
+      }
       function drawAi() {
         const box = $('#aiCard');
         if (!ai) { box.innerHTML = '<h2>Reading SDSs with AI</h2><p class="muted">The AI settings could not be loaded.</p>'; return; }
@@ -142,14 +163,23 @@
           <div id="keyBlock"${needsKey ? '' : ' style="display:none"'}><label for="aiKey">API key</label><input type="password" id="aiKey" autocomplete="new-password" placeholder="${ai.key_source === 'stored' ? 'A key is saved. Type here to replace it.' : 'Paste your key here'}" spellcheck="false">
           <p class="hint" id="keyStatus">Key status: <strong>${ai.key_source === 'secret' ? 'set on the server' : ai.key_source === 'stored' ? 'saved' : 'none'}</strong>. ${keyText}</p></div>
           <p class="hint" id="noKey"${needsKey ? ' style="display:none"' : ''}>This one needs no key.${ai.workers_ai_available ? '' : ' It is not switched on for this server, so pick another provider.'}</p>
+          <h3 style="font-size:14px;margin:18px 0 4px">Photo reading</h3>
+          <p class="hint" style="margin:0 0 6px">When someone photographs a label during an audit, a model that can look at images reads the product name and supplier. If it cannot, people type them in and the photo is still kept.</p>
+          <dl class="kv" style="margin:0 0 6px">
+            <dt>Vision model</dt><dd>${ai.vision && ai.vision.model ? esc(ai.vision.model) : '<span class="none">Not set</span>'}</dd>
+            <dt>Can it read images?</dt><dd>${visionState(ai)}</dd>
+          </dl>
+          <label for="aiVision">Model for reading photos (leave blank for the default)</label><input type="text" id="aiVision" value="${esc(ai.vision && ai.vision.model && ai.vision.model !== ai.vision.default_model ? ai.vision.model : '')}" placeholder="${esc((ai.vision && ai.vision.default_model) || cur.default_vision_model || '')}" autocomplete="off">
           <div class="actions" style="margin-top:12px"><button type="button" class="primary" id="aiSave">Save AI settings</button><button type="button" id="aiTest">Test the saved settings</button>${ai.key_source === 'stored' ? '<button type="button" class="danger" id="aiClear">Remove the saved key</button>' : ''}</div>
           <p class="hint" id="aiDirty" style="display:none">You have unsaved changes. Save them before testing.</p>
+          <div class="actions" style="margin-top:8px"><button type="button" id="aiTestVision">Test photo reading</button></div>
           <div id="aiResult" role="status"></div>`;
         const dirty = () => { $('#aiTest').disabled = true; $('#aiDirty').style.display = 'block'; };
         box.querySelectorAll('input,select').forEach((el) => el.addEventListener('input', dirty));
         $('#aiProv').addEventListener('change', () => {
           const p = providers.find((x) => x.id === $('#aiProv').value);
           $('#aiModel').placeholder = (p && p.default_model) || '';
+          $('#aiVision').placeholder = (p && p.default_vision_model) || '';
           const nk = !!p && p.id !== 'workers_ai';
           $('#keyBlock').style.display = nk ? '' : 'none';
           $('#noKey').style.display = nk ? 'none' : '';
@@ -157,6 +187,7 @@
         });
         $('#aiSave').addEventListener('click', async () => {
           const body = { provider: $('#aiProv').value, model: $('#aiModel').value.trim() };
+          if ($('#aiVision')) body.vision_model = $('#aiVision').value.trim();
           const k = $('#aiKey') ? $('#aiKey').value.trim() : '';
           if (k) body.api_key = k;
           try {
@@ -171,6 +202,14 @@
           if (!await App.confirm('Remove the saved API key?', { okLabel: 'Remove', danger: true })) return;
           try { await App.api('/settings/ai', { method: 'PUT', body: { provider: ai.provider, model: ai.model || '', clear_key: true } }); ai = await App.api('/settings/ai'); drawAi(); App.toast('Key removed.', 'ok'); }
           catch (err) { App.toast(err.message, 'error'); }
+        });
+        $('#aiTestVision').addEventListener('click', async () => {
+          const b = $('#aiTestVision'); b.disabled = true; b.textContent = 'Testing...';
+          try {
+            const r = await App.api('/settings/ai/test-vision', { method: 'POST', body: {} });
+            $('#aiResult').innerHTML = `<div class="notice ${r.ok ? '' : 'bad'}" style="margin-top:12px"><strong>${r.ok ? 'Photo reading works.' : 'Photo reading did not work.'}</strong> ${esc(r.message || '')}</div>`;
+          } catch (err) { $('#aiResult').innerHTML = `<div class="notice bad" style="margin-top:12px">${esc(err.message)}</div>`; }
+          b.disabled = false; b.textContent = 'Test photo reading';
         });
         $('#aiTest').addEventListener('click', async () => {
           const b = $('#aiTest'); b.disabled = true; b.textContent = 'Testing...';

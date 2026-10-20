@@ -13,16 +13,23 @@ import * as Reg from "./register.js";
 import * as Sds from "./sds.js";
 import * as Assess from "./assessments.js";
 import * as Places from "./places.js";
+import * as Audits from "./audits.js";
 import { handleImport } from "./import.js";
 import { handlePrecheck, handleUpload } from "./upload.js";
 import { handleGetAiSettings, handlePutAiSettings, handleTestAi } from "./ai.js";
+import { handleTestVision } from "./label.js";
 
-const USER_WRITES = new Set(["POST /api/uploads", "POST /api/uploads/precheck"]);
+const ID = "(\\d+)";
+const USER_WRITES = new Set([
+  "POST /api/uploads", "POST /api/uploads/precheck",
+  // Audit records and photos: a user acts on audits they started (checked in audits.js), an admin on any.
+  "POST /api/audits", `PUT /api/audits/${ID}/items/${ID}`, `POST /api/audits/${ID}/finish`, `POST /api/audits/${ID}/found/read-label`,
+  `POST /api/audits/${ID}/found/match`, `POST /api/audits/${ID}/found`, `POST /api/audits/${ID}/disposals`, `POST /api/audits/${ID}/photos`,
+]);
 const PUBLIC_WRITES = new Set(["POST /api/setup", "POST /api/login", "POST /api/login/verify", "POST /api/logout"]);
 const DEMO_ALLOWED_WRITES = new Set(["POST /api/login", "POST /api/login/verify", "POST /api/logout"]);
 
 // [method, path regex, access, handler(ctx)]   access: "public" | "user" | "admin" (writes default to admin)
-const ID = "(\\d+)";
 const ROUTES = [
   ["POST", "/api/setup", "public", Auth.handleSetup],
   ["POST", "/api/login", "public", Auth.handleLogin],
@@ -39,6 +46,7 @@ const ROUTES = [
   ["GET", "/api/settings/ai", "admin", (c) => handleGetAiSettings(c.env)],
   ["PUT", "/api/settings/ai", "admin", (c) => handlePutAiSettings(c.request, c.env)],
   ["POST", "/api/settings/ai/test", "admin", (c) => handleTestAi(c.env)],
+  ["POST", "/api/settings/ai/test-vision", "admin", (c) => handleTestVision(c.env)],
 
   ["GET", "/api/users", "admin", Settings.handleListUsers],
   ["POST", "/api/users", "admin", Settings.handleCreateUser],
@@ -55,6 +63,22 @@ const ROUTES = [
   ["POST", `/api/chemicals/${ID}/unlink-sds`, "admin", Sds.handleUnlinkSds],
   ["POST", `/api/chemicals/${ID}/assessments`, "admin", Assess.handleCreateAssessment],
   ["GET", "/api/manifest", "user", Places.handleManifest],
+  ["POST", "/api/audits", "user", Audits.handleStartAudit],
+  ["GET", "/api/audits", "user", Audits.handleListAudits],
+  ["GET", `/api/audits/${ID}`, "user", Audits.handleGetAudit],
+  ["PUT", `/api/audits/${ID}/items/${ID}`, "user", Audits.handleMarkItem],
+  ["POST", `/api/audits/${ID}/finish`, "user", Audits.handleFinishAudit],
+  ["POST", `/api/audits/${ID}/found/read-label`, "user", Audits.handleReadLabelRoute],
+  ["POST", `/api/audits/${ID}/found/match`, "user", Audits.handleFoundMatch],
+  ["POST", `/api/audits/${ID}/found`, "user", Audits.handleAddFound],
+  ["POST", `/api/audits/${ID}/disposals`, "user", Audits.handleAddDisposal],
+  ["POST", `/api/audits/${ID}/photos`, "user", Audits.handleUploadPhoto],
+  ["GET", `/api/audit-photos/${ID}`, "user", Audits.handleGetPhoto],
+  ["GET", "/api/disposals", "admin", Audits.handleListDisposals],
+  ["PUT", `/api/disposals/${ID}/close`, "admin", Audits.handleCloseDisposal],
+  ["GET", "/api/findings", "admin", Audits.handleListFindings],
+  ["POST", `/api/findings/${ID}/accept`, "admin", Audits.handleAcceptFinding],
+  ["POST", `/api/findings/${ID}/dismiss`, "admin", Audits.handleDismissFinding],
   ["GET", "/api/pack", "user", Places.handlePack],
   ["GET", "/api/places", "user", Places.handleListPlaces],
   ["POST", "/api/places", "admin", Places.handleCreatePlace],

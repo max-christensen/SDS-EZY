@@ -16,10 +16,10 @@ import { promptClassList, verifyClassification } from "../public/lib/ghs-ref.mjs
 // Providers and defaults
 
 export const PROVIDERS = [
-  { id: "workers_ai", label: "Cloudflare Workers AI (no setup)", default_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  { id: "claude", label: "Anthropic Claude", default_model: "claude-haiku-4-5" },
-  { id: "openai", label: "OpenAI", default_model: "gpt-5-mini" },
-  { id: "gemini", label: "Google Gemini", default_model: "gemini-2.5-flash" },
+  { id: "workers_ai", label: "Cloudflare Workers AI (no setup)", default_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", default_vision_model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+  { id: "claude", label: "Anthropic Claude", default_model: "claude-haiku-4-5", default_vision_model: "claude-haiku-4-5" },
+  { id: "openai", label: "OpenAI", default_model: "gpt-5-mini", default_vision_model: "gpt-5-mini" },
+  { id: "gemini", label: "Google Gemini", default_model: "gemini-2.5-flash", default_vision_model: "gemini-2.5-flash" },
 ];
 const PROVIDER_IDS = PROVIDERS.map(p => p.id);
 const KEY_ENV = { claude: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY" };
@@ -37,6 +37,8 @@ export const AI_DRAFT_LABEL = "Prepared from the SDS (AI draft)";
 
 const settingKeyFor = (provider) => `ai_key_${provider}`;
 const modelKeyFor = (provider) => `ai_model_${provider}`;
+const visionKeyFor = (provider) => `ai_vision_model_${provider}`;
+const defaultVisionModel = (provider) => (PROVIDERS.find(p => p.id === provider) || PROVIDERS[0]).default_vision_model;
 const defaultModel = (provider) => (PROVIDERS.find(p => p.id === provider) || PROVIDERS[0]).default_model;
 
 class AiError extends Error {
@@ -69,9 +71,10 @@ export async function getAiConfig(env, settings) {
       if (plain) { key = plain; key_source = "stored"; }
     }
   }
+  const visionModel = (s[visionKeyFor(provider)] || "").trim() || defaultVisionModel(provider);
   const configured = provider === "workers_ai" ? !!env.AI : !!key;
   const baseUrl = provider === "workers_ai" ? null : String(env[BASE_ENV[provider]] || BASE_DEFAULT[provider]).replace(/\/+$/, "");
-  return { provider, model, key, key_source, configured, baseUrl };
+  return { provider, model, visionModel, key, key_source, configured, baseUrl };
 }
 
 async function keySources(env, s) {
@@ -90,7 +93,8 @@ export async function handleGetAiSettings(env) {
     key_sources: await keySources(env, s),
     configured: cfg.configured,
     workers_ai_available: !!env.AI,
-    providers: PROVIDERS.map(p => ({ id: p.id, label: p.label, default_model: p.default_model })),
+    vision: { model: cfg.visionModel, supports_images: modelSupportsImages(cfg.provider, cfg.visionModel), default_model: defaultVisionModel(cfg.provider) },
+    providers: PROVIDERS.map(p => ({ id: p.id, label: p.label, default_model: p.default_model, default_vision_model: p.default_vision_model })),
   });
 }
 
@@ -107,6 +111,11 @@ export async function handlePutAiSettings(request, env) {
     model = String(b.model).trim();
     if (model && !/^[A-Za-z0-9._:\/@\-]{1,100}$/.test(model)) return json({ error: "That model name has characters that are not allowed." }, 400);
   }
+  let visionModel;
+  if (b.vision_model !== undefined && b.vision_model !== null) {
+    visionModel = String(b.vision_model).trim();
+    if (visionModel && !/^[A-Za-z0-9._:\/@\-]{1,100}$/.test(visionModel)) return json({ error: "That photo model name has characters that are not allowed." }, 400);
+  }
   let apiKey;
   if (b.api_key !== undefined && b.api_key !== null && String(b.api_key) !== "") {
     apiKey = String(b.api_key).trim();
@@ -119,6 +128,7 @@ export async function handlePutAiSettings(request, env) {
 
   await saveSetting(env, "ai_provider", provider);
   if (model !== undefined) await saveSetting(env, modelKeyFor(provider), model); // empty = back to the default
+  if (visionModel !== undefined) await saveSetting(env, visionKeyFor(provider), visionModel); // empty = back to the default
   if (b.clear_key) await saveSetting(env, settingKeyFor(provider), "");
   if (apiKey) await saveSetting(env, settingKeyFor(provider), await encryptSecret(env, apiKey));
 
@@ -198,27 +208,37 @@ function httpErrorMessage(r, cfg) {
 }
 
 // Returns {text}. Throws AiError.
-export async function callProvider(env, cfg, { system, user, maxTokens }) {
+//   image: {mime, base64} adds a photo to the user message (use a vision model: pass `model`)
+//   model: overrides cfg.model (the "model for reading photos")
+//   json:  false for a plain-text answer (default true: JSON mode where the provider has one)
+export async function callProvider(env, cfg, { system, user, maxTokens, image, model, json: wantJson = true }) {
   const max = maxTokens || MAX_OUT_TOKENS[cfg.provider] || 4096;
-  if (cfg.provider === "workers_ai") return callWorkersAi(env, cfg, system, user, max);
+  const useModel = model || cfg.model;
+  if (cfg.provider === "workers_ai") return callWorkersAi(env, cfg, useModel, system, user, max, image, wantJson);
   if (cfg.provider === "claude") {
+    const content = image
+      ? [{ type: "image", source: { type: "base64", media_type: image.mime, data: image.base64 } }, { type: "text", text: user }]
+      : user;
     const body = await httpJson(env, cfg, `${cfg.baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": cfg.key, "anthropic-version": ANTHROPIC_VERSION },
-      body: JSON.stringify({ model: cfg.model, max_tokens: max, system, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model: useModel, max_tokens: max, system, messages: [{ role: "user", content }] }),
     }, cfg);
     const text = (body && Array.isArray(body.content) ? body.content : []).filter(c => c && c.type === "text").map(c => c.text).join("");
     if (body && body.stop_reason === "max_tokens") throw new AiError("The AI ran out of room before it finished the answer.", "truncated");
     return { text };
   }
   if (cfg.provider === "openai") {
+    const content = image
+      ? [{ type: "text", text: user }, { type: "image_url", image_url: { url: `data:${image.mime};base64,${image.base64}`, detail: "auto" } }]
+      : user;
     const body = await httpJson(env, cfg, `${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${cfg.key}` },
       body: JSON.stringify({
-        model: cfg.model, max_completion_tokens: max,
-        response_format: { type: "json_object" },
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        model: useModel, max_completion_tokens: max,
+        ...(wantJson ? { response_format: { type: "json_object" } } : {}),
+        messages: [{ role: "system", content: system }, { role: "user", content }],
       }),
     }, cfg);
     const choice = body && body.choices && body.choices[0];
@@ -227,52 +247,79 @@ export async function callProvider(env, cfg, { system, user, maxTokens }) {
     return { text: Array.isArray(c) ? c.map(p => p.text || "").join("") : (c || "") };
   }
   if (cfg.provider === "gemini") {
-    const body = await httpJson(env, cfg, `${cfg.baseUrl}/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent`, {
+    const parts = image ? [{ inlineData: { mimeType: image.mime, data: image.base64 } }, { text: user }] : [{ text: user }];
+    const body = await httpJson(env, cfg, `${cfg.baseUrl}/v1beta/models/${encodeURIComponent(useModel)}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": cfg.key },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: "user", parts: [{ text: user }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0, maxOutputTokens: max },
+        contents: [{ role: "user", parts }],
+        generationConfig: { ...(wantJson ? { responseMimeType: "application/json" } : {}), temperature: 0, maxOutputTokens: max },
       }),
     }, cfg);
     const cand = body && body.candidates && body.candidates[0];
     if (cand && cand.finishReason === "MAX_TOKENS") throw new AiError("The AI ran out of room before it finished the answer.", "truncated");
     if (!cand && body && body.promptFeedback && body.promptFeedback.blockReason) throw new AiError("The AI declined to read this document.", "blocked");
-    const parts = cand && cand.content && cand.content.parts;
-    return { text: Array.isArray(parts) ? parts.map(p => p.text || "").join("") : "" };
+    const ps = cand && cand.content && cand.content.parts;
+    return { text: Array.isArray(ps) ? ps.map(p => p.text || "").join("") : "" };
   }
   throw new AiError("Unknown AI provider.");
 }
 
-async function callWorkersAi(env, cfg, system, user, max) {
+async function callWorkersAi(env, cfg, model, system, user, max, image, wantJson = true) {
   if (!env.AI) throw new AiError("Workers AI is not switched on for this install.", "no_binding");
-  const base = { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: max, temperature: 0 };
+  const dataUri = image ? `data:${image.mime};base64,${image.base64}` : null;
+  let base;
+  if (image && /llama-3\.2-11b-vision/i.test(model)) {
+    // this model takes the picture as a separate `image` field (data URI), per the Workers AI model page
+    base = { messages: [{ role: "system", content: system }, { role: "user", content: user }], image: dataUri, max_tokens: max, temperature: 0 };
+  } else if (image) {
+    base = { messages: [{ role: "system", content: system }, { role: "user", content: [{ type: "text", text: user }, { type: "image_url", image_url: { url: dataUri } }] }], max_tokens: max, temperature: 0 };
+  } else {
+    base = { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: max, temperature: 0 };
+  }
   const timeoutMs = Number(env.AI_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
   const run = (opts) => {
     let timer;
     const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new AiError("The AI took too long to answer. Try again, or use a faster model.", "timeout")), timeoutMs); });
-    return Promise.race([env.AI.run(cfg.model, opts), timeout]).finally(() => clearTimeout(timer));
+    return Promise.race([env.AI.run(model, opts), timeout]).finally(() => clearTimeout(timer));
   };
   let r;
   try {
     try {
-      r = await run({ ...base, response_format: { type: "json_object" } });
+      r = await run(wantJson ? { ...base, response_format: { type: "json_object" } } : base);
     } catch (e) {
       if (e instanceof AiError) throw e;
-      if (/response_format|json[_ ]?mode|json_schema/i.test(String(e && e.message))) r = await run(base); // model without JSON mode
+      if (wantJson && /response_format|json[_ ]?mode|json_schema/i.test(String(e && e.message))) r = await run(base); // model without JSON mode
       else throw e;
     }
   } catch (e) {
     if (e instanceof AiError) throw e;
     const m = String(e && e.message || "");
+    if (/licen[sc]e|\bagree\b|acceptable use/i.test(m)) throw new AiError("This Workers AI model needs a one-time licence acceptance. Send one request to the model with the prompt \"agree\" (see the model page in the Cloudflare docs), then try again.", "licence");
     if (/no such model|not found|5007|model/i.test(m) && /not found|no such|unknown/i.test(m)) throw new AiError("Workers AI does not know that model name. Check the model in Settings.", "http_404");
-    throw new AiError("Workers AI could not answer just now. Try again shortly.", "workers_ai");
+    throw new AiError(image ? "Workers AI could not read the photo with this model." : "Workers AI could not answer just now. Try again shortly.", "workers_ai");
   }
   let out = r && (r.response !== undefined ? r.response : r.result && r.result.response);
   if (out === undefined && r && r.choices && r.choices[0] && r.choices[0].message) out = r.choices[0].message.content;
   if (out && typeof out === "object") out = JSON.stringify(out); // JSON mode can hand back an already-parsed object
   return { text: out == null ? "" : String(out) };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Models that can read photos (the label read). A model not listed here may still work; the caller then tries it and, if the
+// provider rejects the image, says "this model can't read photos".
+
+export const IMAGE_MODELS = {
+  workers_ai: ["@cf/meta/llama-4-scout-17b-16e-instruct", "@cf/meta/llama-3.2-11b-vision-instruct", "@cf/google/gemma-3-12b-it"],
+  claude: [/^claude-(haiku|sonnet|opus|fable|mythos)-/],
+  openai: [/^gpt-4o/, /^gpt-4\.1/, /^gpt-4-turbo/, /^gpt-5/, /^gpt-6/, /^o[134](-|$)/],
+  gemini: [/^gemini-(1\.5|2|3)/],
+};
+export function modelSupportsImages(provider, model) {
+  const list = IMAGE_MODELS[provider] || [];
+  const m = String(model || "");
+  return list.some(x => (x instanceof RegExp ? x.test(m) : x === m));
 }
 
 // ---------------------------------------------------------------------------------------------

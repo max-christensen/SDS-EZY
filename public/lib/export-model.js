@@ -106,6 +106,12 @@
       byId: new Map(chemicals.map((c) => [c.id, c])),
       sdsFiles: (data.sds_files || []).map((f) => Object.assign({}, f, { sds_id: Number(f.sds_id), product_names: f.product_names || [] })),
       places: data.places || [],
+      audits: data.audits || [],
+      auditItems: data.audit_items || [],
+      auditFound: data.audit_found || [],
+      auditDisposals: data.audit_disposals || [],
+      auditFindings: data.audit_findings || [],
+      auditPhotos: data.audit_photos || [],
       links: data.links || [],
     };
   }
@@ -134,8 +140,19 @@
     return firstUse;
   }
 
+  // Counts for one audit: the finish-time summary the server wrote, otherwise worked out from the rows returned with it.
+  function auditSummary(model, audit) {
+    let sm = audit.summary;
+    if (typeof sm === "string") { try { sm = JSON.parse(sm); } catch (e) { sm = null; } }
+    if (sm && typeof sm === "object") return Object.assign({ listed: 0, present: 0, not_found: 0, changed: 0, not_marked: 0, found: 0, disposals: 0, photos: 0, photo_bytes: 0 }, sm);
+    const mine = (arr) => (arr || []).filter((x) => Number(x.audit_id) === Number(audit.id));
+    const items = mine(model.auditItems), photos = mine(model.auditPhotos);
+    const c = (r) => items.filter((i) => i.result === r).length;
+    return { listed: items.length, present: c("present"), not_found: c("not_found"), changed: c("changed"), not_marked: items.filter((i) => !i.result).length, found: mine(model.auditFound).length, disposals: mine(model.auditDisposals).length, photos: photos.length, photo_bytes: photos.reduce((n, p) => n + (Number(p.bytes) || 0), 0) };
+  }
+
   return {
-    RISK_LABEL, DECISION_LABEL, STATUS_LABEL, KIND_LABEL, KINDS,
+    auditSummary, RISK_LABEL, DECISION_LABEL, STATUS_LABEL, KIND_LABEL, KINDS,
     normalise, parseClassification, pictogramText, classificationText, reviewStatus, locationText, fmtDate, yesNo, flaggedFields, planSds, groupControls, uniqueStr, todayIso,
   };
 });

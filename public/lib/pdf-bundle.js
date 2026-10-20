@@ -339,6 +339,9 @@
     // ---- manifest, per place (landscape)
     manifestSection(PDFLib, w, ML, model, o, L, prepared);
 
+    // ---- audit history (one line per audit the export returned)
+    auditHistorySection(w, M, model, A4L);
+
     // ---- assessments, each followed by its SDS
     const sdsFirst = M.planSds(model.chemicals);
     const sdsStart = new Map(); // sds_id -> first page number of the included SDS
@@ -373,6 +376,20 @@
 
     const bytes = await doc.save();
     return { bytes, pageCount: total, notes };
+  }
+
+  // One line per audit (place, date, who, counts, photos). A user's export has only their own audits; none = a short note.
+  function auditHistorySection(w, M, model, size) {
+    w.newPage(size);
+    w.heading("Audit history", 15);
+    const list = (model.audits || []).slice().sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
+    if (!list.length) { w.para("No audits have been recorded, or none are visible to you.", { size: 10, color: w.soft }); return; }
+    const rowsOut = list.map((a) => {
+      const x = M.auditSummary(model, a);
+      const date = M.fmtDate(String(a.finished_at || a.started_at || "").slice(0, 10));
+      return [(a.place_name || "") + (a.place_registration ? " (" + a.place_registration + ")" : ""), date, a.started_by_name || "", a.status === "finished" ? "Finished" : "In progress", String(x.listed), String(x.present), String(x.not_found), String(x.changed), String(x.not_marked), String(x.found), String(x.disposals), String(x.photos)];
+    });
+    w.table(["Place", "Date", "Audited by", "Status", "Listed", "Present", "Not found", "Changed", "Not marked", "Found", "Disposal", "Photos"], rowsOut, [20, 10, 14, 10, 5, 6, 6, 6, 6, 5, 6, 5], [null, null, null, null, "r", "r", "r", "r", "r", "r", "r", "r"], { size: 8 });
   }
 
   // For a register table: the official pictogram images for a row's codes (only when EVERY code has an image; otherwise the text codes stay as the fallback).

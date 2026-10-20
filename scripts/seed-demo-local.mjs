@@ -4,7 +4,7 @@
 // It refuses to run with --remote, never reads wrangler.toml itself (wrangler resolves the DB binding),
 // and passes --local to every wrangler call.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from './make-demo.mjs';
@@ -40,14 +40,19 @@ if (!has('--skip-build') || !existsSync(join(outDir, 'demo.sql'))) {
   console.log(`Built demo for ${today}.`);
 }
 
-console.log('1/3 applying schema.sql to the local database');
+console.log('1/4 applying schema.sql to the local database');
 wr(['d1', 'execute', DB_BINDING, '--yes', '--file', join(ROOT, 'schema.sql')]);
-console.log('2/3 loading demo.sql (clears the register tables first)');
+console.log('2/4 loading demo.sql (clears the register tables first)');
 wr(['d1', 'execute', DB_BINDING, '--yes', '--file', join(outDir, 'demo.sql')]);
-console.log('3/3 uploading SDS PDFs to the local R2 bucket');
+console.log('3/4 uploading SDS PDFs to the local R2 bucket');
 const dir = join(outDir, 'pdfs', 'sds');
 for (const f of readdirSync(dir).sort()) {
   wr(['r2', 'object', 'put', `${BUCKET}/sds/${f}`, '--file', join(dir, f), '--content-type', 'application/pdf']);
 }
+console.log('4/4 uploading audit photos to the local R2 bucket');
+const photoRoot = join(outDir, 'photos');
+const photoFiles = [];
+if (existsSync(photoRoot)) for (const a of readdirSync(join(photoRoot, 'audits'))) for (const f of readdirSync(join(photoRoot, 'audits', a))) if (statSync(join(photoRoot, 'audits', a, f)).isFile()) photoFiles.push(`audits/${a}/${f}`);
+for (const key of photoFiles.sort()) wr(['r2', 'object', 'put', `${BUCKET}/${key}`, '--file', join(photoRoot, key), '--content-type', 'image/jpeg']);
 console.log(`Done. Start the Worker with the same state: npx wrangler dev --persist-to "${persist}"`);
 console.log('Demo logins: demo-admin@example.invalid and demo-user@example.invalid (password in docs/DEMO.md).');

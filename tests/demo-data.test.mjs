@@ -37,14 +37,15 @@ test('demo.sql loads and is idempotent (clears then reloads)', { skip }, () => {
   assert.deepEqual(all(db, 'PRAGMA foreign_key_check'), []);
 });
 
-test('about 60 chemicals, hazardous and non-hazardous, one without SDS, one without a decision', { skip }, () => {
+test('about 60 chemicals, hazardous and non-hazardous, two without SDS (one is the audit placeholder), two without a decision', { skip }, () => {
   const db = openDb();
   const n = one(db, 'SELECT COUNT(*) n FROM chemicals').n;
   assert.ok(n >= 55 && n <= 70, 'chemical count ' + n);
   assert.ok(one(db, "SELECT COUNT(*) n FROM chemicals WHERE decision='hazardous'").n >= 20);
   assert.ok(one(db, "SELECT COUNT(*) n FROM chemicals WHERE decision='not_hazardous'").n >= 10);
-  assert.equal(one(db, 'SELECT COUNT(*) n FROM chemicals WHERE sds_id IS NULL').n, 1);
-  assert.equal(one(db, 'SELECT COUNT(*) n FROM chemicals WHERE decision IS NULL').n, 1);
+  assert.equal(one(db, 'SELECT COUNT(*) n FROM chemicals WHERE sds_id IS NULL').n, 2);
+  assert.equal(one(db, 'SELECT COUNT(*) n FROM chemicals WHERE decision IS NULL').n, 2);
+  assert.equal(one(db, "SELECT COUNT(*) n FROM chemicals WHERE source = 'audit'").n, 1);
 });
 
 test('shared SDS: ten-product plaster sheet and four-pack-size adhesive sheet', { skip }, () => {
@@ -108,15 +109,15 @@ test('summary columns match the current SDS, the current assessment and the GHS 
   assert.deepEqual(all(db, 'SELECT chemical_id FROM assessments WHERE is_current = 1 GROUP BY chemical_id HAVING COUNT(*) > 1'), []);
   // exactly one chemical (the soldering flux) has no assessment at all, so the job pack can show "no assessment on file"
   const noCurrent = all(db, 'SELECT product_name FROM chemicals WHERE id NOT IN (SELECT chemical_id FROM assessments WHERE is_current = 1)');
-  assert.deepEqual(noCurrent.map(r => r.product_name), ['Wattlebird Soldering Flux Paste']);
+  assert.deepEqual(noCurrent.map(r => r.product_name).sort(), ['Rapidset Tile Adhesive (found on Ute 2, needs an SDS)', 'Wattlebird Soldering Flux Paste']);
 });
 
-test('classification: one unclassified, one decision override, one pictogram override (GHS09 only by override), one flagged', { skip }, () => {
+test('classification: two unclassified (two-stroke mix, audit placeholder), one decision override, one pictogram override (GHS09 only by override), one flagged', { skip }, () => {
   const db = openDb();
   const rows = all(db, 'SELECT * FROM chemicals');
   const unclassified = rows.filter(r => r.ghs_classification === null);
-  assert.equal(unclassified.length, 1);
-  assert.equal(unclassified[0].decision, null);
+  assert.equal(unclassified.length, 2);
+  for (const u of unclassified) assert.equal(u.decision, null);
   assert.ok(rows.filter(r => r.ghs_classification === '[]').every(r => r.decision === 'not_hazardous' || r.decision_override === 'hazardous'));
   const dOv = rows.filter(r => r.decision_override);
   assert.equal(dOv.length, 1);
@@ -130,9 +131,11 @@ test('classification: one unclassified, one decision override, one pictogram ove
   assert.equal(flagged.length, 1);
   assert.ok(JSON.parse(flagged[0].ghs_classification).some(e => e.check === true));
   assert.equal(one(db, 'SELECT unverified u FROM sds WHERE id = ?', flagged[0].sds_id).u, '["classification"]');
-  const noSds = rows.filter(r => r.sds_id === null);
+  const noSds = rows.filter(r => r.sds_id === null && r.source !== 'audit');
   assert.equal(noSds.length, 1);
   assert.equal(JSON.parse(noSds[0].ghs_classification)[0].src, 'admin');
+  const ph = rows.filter(r => r.source === 'audit');
+  assert.equal(ph.length, 1); assert.equal(ph[0].sds_id, null); assert.equal(ph[0].ghs_classification, null);
 });
 
 test('classification examples match what the product really is', { skip }, () => {
@@ -248,9 +251,9 @@ test('sample job pack: Ute 2 has chemicals with no SDS and no assessment, and a 
   const chems = all(db, `SELECT c.id, c.product_name, c.sds_id, (SELECT COUNT(*) FROM assessments a WHERE a.chemical_id = c.id AND a.is_current = 1) has_a
     FROM chemical_places cp JOIN chemicals c ON c.id = cp.chemical_id WHERE cp.place_id = ?`, ute2);
   assert.ok(chems.length >= 15);
-  assert.deepEqual(chems.filter(c => c.sds_id === null).map(c => c.product_name), ['Concrete Sealer (solvent-based, unlabelled tin)']);
-  assert.deepEqual(chems.filter(c => !c.has_a).map(c => c.product_name), ['Wattlebird Soldering Flux Paste']);
-  assert.deepEqual(summary.no_sds, [66]); assert.deepEqual(summary.no_assessment, [38]);
+  assert.deepEqual(chems.filter(c => c.sds_id === null).map(c => c.product_name), ['Concrete Sealer (solvent-based, unlabelled tin)', 'Rapidset Tile Adhesive (found on Ute 2, needs an SDS)']);
+  assert.deepEqual(chems.filter(c => !c.has_a).map(c => c.product_name).sort(), ['Rapidset Tile Adhesive (found on Ute 2, needs an SDS)', 'Wattlebird Soldering Flux Paste']);
+  assert.deepEqual(summary.no_sds, [66, 67]); assert.deepEqual(summary.no_assessment, [38, 67]);
   assert.ok(chems.some(c => c.sds_id !== null && c.has_a));
 });
 

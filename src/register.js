@@ -40,6 +40,7 @@
 
 import { json, loadSettings, todayIso, daysBetweenIso } from "./lib.js";
 import { linkChemicalToPlaceStatements, validatePlaceLink } from "./places.js";
+import { auditExportData } from "./audits.js";
 import {
   effective, normaliseClassification, parsePictogramList, PICTOGRAM_CODES, computePlaceTotals,
 } from "../public/lib/ghs-ref.mjs";
@@ -52,7 +53,7 @@ export const RISK_LEVELS = ["not_significant", "significant_controlled", "signif
 export const PHYSICAL_FORMS = ["liquid", "solid", "powder", "gas", "aerosol", "paste", "other"];
 export const DECISIONS = ["hazardous", "not_hazardous"];
 export const OPTION_KINDS = ["isolation", "ventilation", "other", "ppe", "additional_ppe"];
-export const SOURCES = ["upload", "manual", "import", "demo"];
+export const SOURCES = ["upload", "manual", "import", "demo", "audit"];
 export const ASSESSMENT_SOURCES = ["ai", "manual", "import", "demo", "blank"];
 export const UNITS = ["L", "kg"];
 
@@ -289,7 +290,9 @@ async function userNameById(env, userId) {
   return u ? u.name : null;
 }
 
-export async function createChemical(env, fields, userId) {
+// The statements createChemical runs, for callers that need to add their own statements to the same batch.
+// The chemical INSERT is statement 0 (its id is res[0].meta.last_row_id); later statements may use (SELECT MAX(id) FROM chemicals).
+export async function chemicalCreateStatements(env, fields, userId) {
   const f = cleanChemical(fields || {}, { create: true });
   let sdsId = null;
   if (fields.sds_id !== undefined && fields.sds_id !== null && fields.sds_id !== "") {
@@ -321,7 +324,11 @@ export async function createChemical(env, fields, userId) {
       containerNote: fields.place.container_note, spillCompound: fields.place.spill_compound,
     }));
   }
-  const res = await env.DB.batch(stmts);
+  return stmts;
+}
+
+export async function createChemical(env, fields, userId) {
+  const res = await env.DB.batch(await chemicalCreateStatements(env, fields, userId));
   return res[0].meta.last_row_id;
 }
 
@@ -439,9 +446,21 @@ export async function handleReview(c) {
     env.DB.prepare(`SELECT ${cols} FROM chemicals WHERE review_due >= ? AND review_due <= ? ORDER BY review_due LIMIT ${CAP}`).bind(today, soonLimit),
     env.DB.prepare(`SELECT ${cols} FROM chemicals WHERE sds_id IS NULL LIMIT ${CAP}`),
     env.DB.prepare(`SELECT ${cols} FROM chemicals WHERE decision IS NULL LIMIT ${CAP}`),
+    // Active places that hold chemicals and were never audited, or not within audit_reminder_days (default 90).
+    env.DB.prepare(
+      `SELECT p.id AS place_id, p.name, p.place_type, p.registration, a.last_audited_at
+       FROM places p LEFT JOIN place_audit_summary a ON a.place_id = p.id
+       WHERE p.archived = 0 AND p.chemical_count > 0 AND (a.last_audited_at IS NULL OR substr(a.last_audited_at, 1, 10) < date('now', '-' || coalesce((SELECT value FROM settings WHERE key = 'audit_reminder_days'), '90') || ' days'))
+       ORDER BY a.last_audited_at IS NOT NULL, a.last_audited_at, p.name COLLATE NOCASE LIMIT ${CAP}`
+    ),
+    ...(c.user && c.user.role === "admin" ? [
+      env.DB.prepare("SELECT COUNT(*) AS n FROM audit_findings WHERE status = 'open'"),
+      env.DB.prepare("SELECT COUNT(*) AS n FROM audit_disposals WHERE status = 'to_dispose'"),
+    ] : []),
   ]);
   const names = ["overdue", "due_soon", "no_sds", "no_decision"];
-  const lists = res.map(r => r.results);
+  const lists = res.slice(0, 4).map(r => r.results);
+  const notAudited = res[4].results;
   // A count is only a separate query when a list hit its cap.
   const countSql = [
     ["SELECT COUNT(*) AS n FROM chemicals WHERE review_due < ?", [today]],
@@ -456,7 +475,20 @@ export async function handleReview(c) {
     const cr = await env.DB.batch(need.map(i => env.DB.prepare(countSql[i][0]).bind(...countSql[i][1])));
     need.forEach((i, k) => { counts[names[i]] = cr[k].results[0].n; });
   }
+  counts.not_audited = notAudited.length;
+  if (notAudited.length >= CAP) {
+    const cr = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM places p LEFT JOIN place_audit_summary a ON a.place_id = p.id
+       WHERE p.archived = 0 AND p.chemical_count > 0 AND (a.last_audited_at IS NULL OR substr(a.last_audited_at, 1, 10) < date('now', '-' || coalesce((SELECT value FROM settings WHERE key = 'audit_reminder_days'), '90') || ' days'))`
+    ).first();
+    counts.not_audited = cr.n;
+  }
+  if (res.length > 5) { counts.findings_open = res[5].results[0].n; counts.disposals_open = res[6].results[0].n; }
   const out = { as_of: today, counts };
+  out.not_audited = notAudited.map(r => ({
+    place_id: r.place_id, name: r.name, place_type: r.place_type, registration: r.registration, last_audited_at: r.last_audited_at,
+    days: r.last_audited_at ? daysBetweenIso(r.last_audited_at.slice(0, 10), today) : null,
+  }));
   const byName = (a, b) => String(a.product_name).toLowerCase().localeCompare(String(b.product_name).toLowerCase());
   names.forEach((n, i) => {
     const rows = lists[i].map(r => ({ ...r, review_status: reviewStatus(r.review_due, r.sds_id, today) }));
@@ -740,6 +772,7 @@ export async function handleExportAll(c) {
     places: placesRes.results,
     links: linksRes.results,
     place_totals: placeTotals,
+    ...(await auditExportData(env, c.user)),
     assessments,
     sds_files: sdsFiles.results.map(s => ({ sds_id: s.id, file_name: s.file_name, product_names: names.get(s.id) || [], has_file: !!s.has_file })),
   });

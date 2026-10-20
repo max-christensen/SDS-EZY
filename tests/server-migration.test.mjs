@@ -1,4 +1,4 @@
-// Migration through the real wrangler path: build a local D1 from the OLD schema (the one in git HEAD that still has only
+// Migration through the real wrangler path: build a local D1 from the OLD schema (frozen in tests/fixtures/schema-before-places.sql, which still has only
 // storage_locations), add chemicals and storage locations, run the NEW schema.sql twice, and check places / links.
 // Needs no running server. Slow (several wrangler calls); skips itself if git or wrangler cannot be run.
 import { test } from "node:test";
@@ -24,9 +24,9 @@ function sql(text, dir) {
 const rows = (res) => res[res.length - 1].results;
 
 test("old database migrates to places and the migration is repeatable", { timeout: 600000 }, (t) => {
-  let oldSchema;
-  try { oldSchema = execFileSync("git", ["show", "HEAD:schema.sql"], { cwd: ROOT, encoding: "utf8" }); } catch { return t.skip("git show HEAD:schema.sql is not available"); }
-  if (!/storage_locations/.test(oldSchema) || /CREATE TABLE IF NOT EXISTS places/.test(oldSchema)) return t.skip("HEAD schema is not the old (pre-places) schema");
+  // The schema as it was before places existed, frozen from the commit that preceded them (so this test does not depend on git history).
+  const oldSchema = fs.readFileSync(path.join(ROOT, "tests", "fixtures", "schema-before-places.sql"), "utf8");
+  assert.ok(/storage_locations/.test(oldSchema) && !/CREATE TABLE IF NOT EXISTS places/.test(oldSchema), "the fixture must be the pre-places schema");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sdsezy-mig-"));
   const oldFile = path.join(tmp, "old.sql");
   fs.writeFileSync(oldFile, oldSchema);

@@ -79,7 +79,7 @@
     }
   }
 
-  function readme(disclaimerFull, companyName, generated, count, missing, source) {
+  function readme(disclaimerFull, companyName, generated, count, missing, source, extra) {
     const lines = ["SDS EZY - take-away safety data sheets"];
     if (companyName) lines.push("Business: " + companyName);
     lines.push(
@@ -97,6 +97,7 @@
       lines.push("", "No PDF could be fetched for:");
       missing.forEach((m) => lines.push("  - " + m));
     }
+    (extra || []).forEach((l) => lines.push(l));
     return lines.join("\r\n") + "\r\n";
   }
 

@@ -42,3 +42,8 @@ test("sha256", async () => {
   assert.equal(await H.sha256Hex(new TextEncoder().encode("abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   assert.equal(H.precheckBody("h", "f.pdf", 5, "x".repeat(9000)).text_head.length, 4000);
 });
+
+test("zip README can carry extra lines (the audit reports note)", () => {
+  const t = ZB.readme("Disc.", "Acme", "20 Oct 2026", 1, [], "Source line", ["", "Audit reports (with photos): 2 PDFs in the audit-reports folder."]);
+  assert.ok(t.includes("Source line") && t.includes("Audit reports (with photos): 2 PDFs"));
+});

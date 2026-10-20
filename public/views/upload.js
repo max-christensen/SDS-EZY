@@ -65,19 +65,27 @@
 
   App.views.register('upload', {
     title: 'Upload an SDS',
-    async render(root) {
+    async render(root, params) {
+      const q = (params && params.query) || {};
       css();
       let dead = false;
       App.onLeave(() => { dead = true; });
       const lib = await loadLibs();
       const st = { placeId: myPlaceId(), places: [], file: null, buf: null, hash: '', text: '', scanned: false, pages: 0, pre: null, replaceId: null, maxMb: Number((App.settings && App.settings.upload_max_mb) || 15) };
       try { const pl = await App.api('/places'); st.places = Array.isArray(pl) ? pl : []; } catch (e) { st.places = []; }
-      if (st.placeId && !st.places.some((x) => String(x.id) === st.placeId)) st.placeId = '';
+      // Found during an audit: #/upload?for_chemical=ID&place=ID&audit=ID. The SDS is attached to that existing record.
+      st.forChem = Number(q.for_chemical) || 0;
+      st.auditId = Number(q.audit) || 0;
+      if (st.forChem && q.place) st.placeId = String(q.place);
+      st.lockPlace = !!(st.forChem && q.place);
+      if (st.placeId && !st.places.some((x) => String(x.id) === st.placeId)) { if (!st.lockPlace) st.placeId = ''; }
+      st.forName = '';
+      if (st.forChem) { try { st.forName = (await App.api('/chemicals/' + st.forChem)).chemical.product_name || ''; } catch (e) { st.forName = ''; } }
       const onNet = () => { const n = root.querySelector('#offNote'); if (n) n.hidden = !isOffline(); const b = root.querySelector('#qSubmit'); if (b) b.disabled = isOffline(); };
       window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
       App.onLeave(() => { window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet); });
 
-      const topbar = '<div class="topbar"><div><h1>Upload a safety data sheet</h1><p class="sub">Add a PDF and SDS EZY will read it, add the chemical to the register and draft its risk assessment.</p></div></div>';
+      const topbar = st.forChem ? `<div class="topbar"><div><h1>Add the safety data sheet</h1><p class="sub">Adding the SDS for <strong>${App.esc(st.forName || 'chemical #' + st.forChem)}</strong> found during your audit. The PDF is attached to that record and its assessment is drafted.</p></div></div>` : '<div class="topbar"><div><h1>Upload a safety data sheet</h1><p class="sub">Add a PDF and SDS EZY will read it, add the chemical to the register and draft its risk assessment.</p></div></div>';
       const shell = (inner) => { root.innerHTML = topbar + inner; };
 
       function stepChoose(message) {
@@ -137,7 +145,7 @@
           if (st.pre.limits && file.size > st.pre.limits.max_mb * 1048576) return stepChoose(`That file is over the ${st.pre.limits.max_mb} MB limit.`);
           if (st.pre.exact_duplicate) return stepDuplicate(st.pre.exact_duplicate);
           if (st.pre.limits && st.pre.limits.remaining_this_hour === 0) return stepChoose('You have reached the upload limit for this hour. Please try again a little later.');
-          if (st.pre.candidates && st.pre.candidates.length) return stepCandidates(st.pre.candidates);
+          if (st.pre.candidates && st.pre.candidates.length && !st.forChem) return stepCandidates(st.pre.candidates);
           stepQuestions();
         } catch (e) {
           console.error(e);
@@ -195,7 +203,7 @@
           <form class="card" id="qForm" novalidate>
             <fieldset class="up-q"><legend><label for="qPlace" style="margin:0;color:inherit;font-size:inherit">Where is it kept?</label></legend>
               <p class="hint">Pick the vehicle, workshop or site. You can leave it as not recorded.</p>
-              <select id="qPlace" style="min-height:48px;font-size:16px"><option value="">Not recorded</option>${st.places.map((x) => `<option value="${x.id}"${String(x.id) === st.placeId ? ' selected' : ''}>${App.esc(x.name)}${x.registration ? ' (' + App.esc(x.registration) + ')' : ''}</option>`).join('')}</select></fieldset>
+              <select id="qPlace" style="min-height:48px;font-size:16px"${st.lockPlace ? ' disabled' : ''}><option value="">Not recorded</option>${st.places.map((x) => `<option value="${x.id}"${String(x.id) === st.placeId ? ' selected' : ''}>${App.esc(x.name)}${x.registration ? ' (' + App.esc(x.registration) + ')' : ''}</option>`).join('')}</select></fieldset>
             <h2>Five quick questions</h2>
             <p class="hint">The safety data sheet cannot tell us how <em>you</em> use the chemical. Your answers help draft the assessment. Pick the closest answer.</p>
             <fieldset class="up-q"><legend><label for="q1" style="margin:0;color:inherit;font-size:inherit">1. Where and how is it used?</label></legend>
@@ -242,6 +250,7 @@
         fd.append('text', st.text);
         fd.append('answers', JSON.stringify(answers));
         if (st.placeId) fd.append('place_id', st.placeId);
+        if (st.forChem) fd.append('for_chemical_id', String(st.forChem));
         if (st.replaceId) fd.append('replace_sds_id', String(st.replaceId));
         fd.append('request_id', (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()) + Math.random());
         stepBusy('Reading the sheet...', 'Sending the file...', null);
@@ -298,7 +307,7 @@
           headline = 'Added to the register';
           body = 'The assessment was drafted from the sheet and your answers. Please check it makes sense for your workplace.';
         }
-        shell(`<div class="card" role="status"><h2>${App.esc(headline)}</h2><p>${App.esc(body)}</p>
+        shell(`<div class="card" role="status"><h2>${App.esc(st.forChem ? 'SDS attached' : headline)}</h2><p>${App.esc(st.forChem ? 'The safety data sheet was attached to the existing record' + (st.forName ? ' for ' + st.forName : '') + '. ' + body : body)}</p>
           ${st.scanned ? '<div class="notice warn">The sheet had no readable text, so the entry is a draft for an admin to fill in.</div>' : ''}
           <h3 style="font-size:14px;margin:14px 0 4px">What was created</h3>
           ${st.placeId ? `<p class="hint" style="margin:0 0 4px">Linked to the place: <strong>${App.esc((st.places.find((x) => String(x.id) === st.placeId) || {}).name || 'chosen place')}</strong>.</p>` : '<p class="hint" style="margin:0 0 4px">Where it is kept was not recorded.</p>'}
@@ -306,7 +315,7 @@
           ${flat.length ? `<div class="notice warn" style="margin-top:14px"><strong>Please check these:</strong> ${flat.map((f) => `<span class="flag">${App.esc(label(f))}</span>`).join(' ')}<br><span class="hint">These were not found in the SDS text, so they were left blank rather than guessed.</span></div>` : ''}
           ${(res.warnings || []).length ? `<ul class="up-links">${res.warnings.map((w) => `<li>${App.esc(typeof w === 'string' ? w : w.message || '')}</li>`).join('')}</ul>` : ''}
           <p class="hint" style="margin-top:16px">${App.esc((window.DISCLAIMER && window.DISCLAIMER.short) || '')}</p>
-          <div class="actions" style="margin-top:12px"><button type="button" class="primary" id="another">Upload another sheet</button><a class="btn" href="#/register">Open the register</a></div></div>`);
+          <div class="actions" style="margin-top:12px">${st.forChem && st.auditId ? `<a class="btn primary" href="#/audit/${st.auditId}">Back to the audit</a>` : ''}<button type="button" class="${st.forChem && st.auditId ? '' : 'primary'}" id="another">Upload another sheet</button><a class="btn" href="#/register">Open the register</a></div></div>`);
         root.querySelector('#another').addEventListener('click', () => stepChoose());
       }
 

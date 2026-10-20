@@ -189,7 +189,7 @@ test("the key never leaks: settings, test endpoint, extraction errors", async ()
   assert.ok(stored && !stored.includes(KEY) && !stored.includes("SECRETKEY"), "stored encrypted");
   const get = await (await handleGetAiSettings(env)).text();
   assert.ok(!get.includes(KEY) && !get.includes("SECRETKEY"));
-  assert.deepEqual(Object.keys(JSON.parse(get)).sort(), ["configured", "key_source", "key_sources", "model", "provider", "providers", "workers_ai_available"]);
+  assert.deepEqual(Object.keys(JSON.parse(get)).sort(), ["configured", "key_source", "key_sources", "model", "provider", "providers", "vision", "workers_ai_available"]);
 
   // provider echoes the key back in an error body and in a thrown network error
   let f = mockFetch((c) => jsonRes({ error: { message: `Incorrect API key provided: ${KEY}` } }, 400));

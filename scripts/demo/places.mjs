@@ -69,6 +69,8 @@ export const LINKS = [
   D('Expanding Foam', 'W', 4.5, 'L', 'Maintenance store: 6 x 750 mL cans', MS),
   D('Expanding Foam', 'U2', 1.5, 'L', '2 x 750 mL cans'),
   D('Expanding Foam', 'S', 3, 'L', '4 x 750 mL cans'),
+  // ---- found during the Ute 2 audit: a placeholder chemical linked to the ute (no quantity)
+  D('Rapidset Tile Adhesive', 'U2', null, null, 'Tub found under the passenger seat'),
   // ---- gases (litres of water capacity)
   D('LPG Cylinders', 'W', 105, 'L', 'Gas cage: 1 x 45 kg cylinder for the workshop heater (about 105 L water capacity)'),
   D('LPG Cylinders', 'S', 210, 'L', '2 x 45 kg cylinders for the site heaters (about 105 L water capacity each)'),

@@ -282,3 +282,166 @@ INSERT OR IGNORE INTO control_options (kind, label, sort_order) VALUES
   ('additional_ppe', 'P2 dust mask', 30),
   ('additional_ppe', 'Half-face respirator with suitable filter', 40),
   ('additional_ppe', 'Chemical-resistant apron', 50);
+
+-- ---------------------------------------------------------------------------------------------
+-- CHEMICAL AUDITS. Someone walks a place (workshop, vehicle or site) and marks each chemical Present, Not found or Changed,
+-- photographs things, records items found that are not on the register, and flags items for disposal. Nothing here changes the
+-- register by itself: "Not found" and "Changed" become FINDINGS that an admin accepts or dismisses. A user can write audit
+-- records and uploads only (see docs/AUDIT-CHANGE.md). These tables are all new, so there is nothing to migrate and no existing
+-- table is altered. Rows keep snapshots (place name, product name, expected quantity) so an old audit still reads correctly after
+-- the register changes, and chemical / link ids in these tables are plain numbers, not foreign keys, for the same reason.
+--
+-- Every row a phone creates carries a client_id the phone made up, so any request can be sent twice (a flaky signal, an offline
+-- queue replaying) without making a second row. Times that matter (started, marked, taken, found, flagged) are the DEVICE's time,
+-- because the phone may be offline; received_at / created_at are the server's.
+
+CREATE TABLE IF NOT EXISTS audits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id TEXT,                                 -- made up by the phone; unique per person
+  place_id INTEGER NOT NULL REFERENCES places(id),
+  place_name TEXT NOT NULL,                       -- snapshots
+  place_type TEXT NOT NULL,
+  place_registration TEXT,
+  started_by INTEGER NOT NULL REFERENCES users(id),
+  started_by_name TEXT NOT NULL,
+  started_at TEXT NOT NULL,                       -- device time, ISO
+  finished_at TEXT,                               -- device time, ISO; NULL while in progress
+  finished_by INTEGER REFERENCES users(id),
+  finished_by_name TEXT,
+  status TEXT NOT NULL DEFAULT 'in_progress',     -- 'in_progress' | 'finished'
+  notes TEXT,
+  summary TEXT,                                   -- JSON of the counts, written when the audit is finished
+  received_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (started_by, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_audits_place ON audits(place_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_audits_user ON audits(started_by, started_at);
+CREATE INDEX IF NOT EXISTS idx_audits_status ON audits(status, started_at);
+
+-- One row per chemical linked to the place when the audit started.
+CREATE TABLE IF NOT EXISTS audit_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_id INTEGER NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  chemical_id INTEGER NOT NULL,                   -- plain number (see above)
+  link_id INTEGER,                                -- chemical_places.id at the start; may be gone later
+  product_name TEXT NOT NULL,                     -- snapshots at the start of the audit
+  supplier TEXT,
+  expected_quantity REAL,
+  expected_unit TEXT,
+  expected_container_note TEXT,
+  review_due TEXT,
+  review_status TEXT,                             -- 'overdue' | 'due_soon' | 'ok' | 'no_sds' | 'unknown'
+  has_sds INTEGER NOT NULL DEFAULT 0,
+  has_assessment INTEGER NOT NULL DEFAULT 0,
+  risk_level TEXT,
+  result TEXT,                                    -- NULL = not marked yet | 'present' | 'not_found' | 'changed'
+  note TEXT,
+  new_quantity REAL,                              -- 'changed': what it is now (any of these, with or without a note)
+  new_unit TEXT,
+  new_container_note TEXT,
+  marked_at TEXT,                                 -- device time
+  UNIQUE (audit_id, chemical_id)
+);
+CREATE INDEX IF NOT EXISTS idx_aitems_audit ON audit_items(audit_id);
+
+-- Something found that is not on the register (or not linked to this place).
+CREATE TABLE IF NOT EXISTS audit_found (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_id INTEGER NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  supplier TEXT,
+  source TEXT NOT NULL DEFAULT 'typed',           -- 'ai' (read from the label photo) | 'typed'
+  ai_provider TEXT,
+  matched_chemical_id INTEGER,                    -- a register match the person confirmed
+  chemical_id INTEGER,                            -- the chemical it ended up as (the match, or the new "needs an SDS" one)
+  outcome TEXT NOT NULL DEFAULT 'recorded',       -- 'linked' (admin linked it now) | 'link_suggested' (a user: becomes a finding) | 'created' (new chemical, needs an SDS) | 'recorded'
+  note TEXT,
+  found_at TEXT NOT NULL,                         -- device time
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (audit_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_afound_audit ON audit_found(audit_id);
+
+-- An item flagged for disposal, from an audit. Status to_dispose -> disposed (an admin closes it with a note and optionally a photo).
+CREATE TABLE IF NOT EXISTS audit_disposals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_id INTEGER NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  place_id INTEGER NOT NULL,
+  place_name TEXT NOT NULL,
+  chemical_id INTEGER,                            -- optional: the register chemical it is
+  description TEXT NOT NULL,
+  reason TEXT NOT NULL,                           -- 'expired' | 'unlabelled' | 'damaged' | 'unknown' | 'no_sds'
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'to_dispose',      -- 'to_dispose' | 'disposed'
+  flagged_by INTEGER NOT NULL,
+  flagged_by_name TEXT NOT NULL,
+  flagged_at TEXT NOT NULL,                       -- device time
+  closed_by INTEGER,
+  closed_by_name TEXT,
+  closed_at TEXT,
+  close_note TEXT,
+  UNIQUE (audit_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_adisp_status ON audit_disposals(status, flagged_at);
+CREATE INDEX IF NOT EXISTS idx_adisp_audit ON audit_disposals(audit_id);
+
+-- What the admin works through. Written when an audit is finished. Accepting one changes the register (unlink from the place,
+-- update the quantity, link a found item); dismissing changes nothing.
+CREATE TABLE IF NOT EXISTS audit_findings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_id INTEGER NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,                             -- 'not_found' | 'changed' | 'found_link'
+  chemical_id INTEGER,
+  place_id INTEGER NOT NULL,
+  place_name TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  link_id INTEGER,
+  audit_item_id INTEGER,
+  found_id INTEGER,
+  details TEXT,                                   -- JSON: expected quantity/unit/container, new quantity/unit/container, the person's note
+  status TEXT NOT NULL DEFAULT 'open',            -- 'open' | 'accepted' | 'dismissed'
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_by INTEGER,
+  resolved_by_name TEXT,
+  resolved_at TEXT,
+  resolve_note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_afind_status ON audit_findings(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_afind_audit ON audit_findings(audit_id);
+
+-- Photos, kept in R2 (key audits/<audit_id>/<uuid>.jpg). Only ever served to someone who can see the audit.
+CREATE TABLE IF NOT EXISTS audit_photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_id INTEGER NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  owner_type TEXT NOT NULL,                       -- 'item' | 'found' | 'disposal' | 'disposal_close' | 'audit'
+  owner_key TEXT,                                 -- item: the chemical id; found / disposal / disposal_close: that row's client_id; audit: NULL
+  r2_key TEXT NOT NULL,
+  content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+  bytes INTEGER NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  taken_at TEXT NOT NULL,                         -- when the photo was taken (device time)
+  uploaded_by INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (audit_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_aphotos_audit ON audit_photos(audit_id, owner_type, owner_key);
+
+-- When each place was last audited (a small summary table so the review list and the place picker never read audit history).
+CREATE TABLE IF NOT EXISTS place_audit_summary (
+  place_id INTEGER PRIMARY KEY REFERENCES places(id),
+  last_audit_id INTEGER NOT NULL,
+  last_audited_at TEXT NOT NULL                   -- the finish time of the latest finished audit
+);
+CREATE INDEX IF NOT EXISTS idx_pas_when ON place_audit_summary(last_audited_at);
+
+-- One row per label-photo read by the AI, for the per-person hourly limit.
+CREATE TABLE IF NOT EXISTS audit_ai_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_aailog_user_time ON audit_ai_log(user_id, created_at);

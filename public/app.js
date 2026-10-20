@@ -231,6 +231,26 @@
   };
   window.addEventListener('afterprint', () => { $('printArea').textContent = ''; $('pageStyle').textContent = ''; });
 
+  // ---------------------------------------------------------------- small shared helpers for the audit screens
+  App.uuid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => { const r = Math.random() * 16 | 0; return (ch === 'x' ? r : (r & 3 | 8)).toString(16); }));
+  App.parseJson = (v, fallback) => { if (v && typeof v === 'object') return v; try { return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; } };
+  App.daysSince = (iso) => { if (!iso) return null; const t = new Date(/^d{4}-d{2}-d{2}$/.test(iso) ? iso + 'T00:00:00' : String(iso).replace(' ', 'T') + (/[zZ]|[+-]dd:?dd$/.test(iso) ? '' : 'Z')); return isNaN(t) ? null : Math.floor((Date.now() - t.getTime()) / 86400000); };
+  App.photoThumbs = (ids) => (ids && ids.length) ? `<div class="photo-row">${ids.map((id) => `<a href="/api/audit-photos/${id}" target="_blank" rel="noopener"><img src="/api/audit-photos/${id}" alt="Photo ${id}" loading="lazy" width="72" height="72"></a>`).join('')}</div>` : '';
+  // Compress a photo on the device: longest side 1600 px, JPEG 0.7, orientation applied, EXIF dropped (canvas re-encode).
+  App.compressPhoto = async function (file) {
+    if (window.SDSLib && SDSLib.photo && typeof SDSLib.photo.compress === 'function') return SDSLib.photo.compress(file);
+    let bmp;
+    try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+    catch (e) { throw new Error('That photo could not be read.'); }
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * k), h = Math.round(bmp.height * k);
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    const blob = await new Promise((res) => cv.toBlob(res, 'image/jpeg', 0.7));
+    if (!blob) throw new Error('That photo could not be compressed.');
+    return { blob, width: w, height: h, taken_at: file.lastModified ? new Date(file.lastModified).toISOString() : new Date().toISOString() };
+  };
+
   // ---------------------------------------------------------------- downloads and CSV
   App.csv = function (rows) {
     const q = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
@@ -400,15 +420,26 @@
     { href: '#/hazardous', label: 'Hazardous', key: 'hazardous' },
     { href: '#/manifest', label: 'Manifest', key: 'manifest' },
     { href: '#/pack', label: 'Job pack', key: 'pack' },
+    { href: '#/audits', label: 'Audits', key: 'audits' },
     { href: '#/upload', label: 'Upload SDS', key: 'upload' },
     { href: '#/take-away', label: 'Take-away', key: 'takeaway' },
     { head: 'Admin', admin: true },
+    { href: '#/findings', label: 'Findings', key: 'findings', admin: true, badge: 'findings' },
+    { href: '#/disposals', label: 'Disposals', key: 'disposals', admin: true, badge: 'disposals' },
     { href: '#/import', label: 'Import', key: 'import', admin: true },
     { href: '#/options', label: 'Options', key: 'options', admin: true },
     { href: '#/users', label: 'Users', key: 'users', admin: true },
     { href: '#/settings', label: 'Settings', key: 'settings', admin: true },
   ];
   let currentKey = '';
+  // Small open-item counts shown next to Findings and Disposals (admins). Screens call App.setBadges after they load.
+  App.badges = { findings: 0, disposals: 0 };
+  App.setBadges = function (b) {
+    App.badges = Object.assign({}, App.badges, b || {});
+    if (App.me && $('sidebar')) renderNav(currentKey);
+  };
+  const badgeHtml = (n) => { const k = n.badge ? App.badges[n.badge] : 0; return k ? ` <span class="navbadge" aria-label="${k} open">${k > 99 ? '99+' : k}</span>` : ''; };
+  App.badgeHtml = badgeHtml;
   const myPlaceHref = () => { const id = App.myPlace(); return id ? '#/place/' + id : '#/places'; };
   function tabFor(key) {
     if (key === 'places' || key === 'place') return 'place';
@@ -430,7 +461,7 @@
     const items = NAV.filter((n) => !n.admin || App.isAdmin());
     $('sidebar').innerHTML = items.map((n) => n.head
       ? `<div class="navhead">${n.head}</div>`
-      : `<a class="navlink" href="${n.href}"${n.key === activeKey || (n.key === 'places' && activeKey === 'place') ? ' aria-current="page"' : ''}>${n.label}</a>`).join('')
+      : `<a class="navlink" href="${n.href}"${n.key === activeKey || (n.key === 'places' && activeKey === 'place') ? ' aria-current="page"' : ''}>${n.label}${badgeHtml(n)}</a>`).join('')
       + `<div class="navhead">Help</div><a class="navlink" href="help.html" target="_blank" rel="noopener">Help</a>`
       + signOutHtml();
     const lb = $('sidebar').querySelector('#logoutBtn'); if (lb) lb.addEventListener('click', logout);
@@ -444,7 +475,7 @@
     render(root) {
       const links = NAV.filter((n) => n.href && (!n.admin || App.isAdmin()) && !['places', 'pack', 'register'].includes(n.key));
       const adminLinks = links.filter((n) => n.admin), main = links.filter((n) => !n.admin);
-      const row = (n) => `<li><a class="item" href="${n.href}"><span class="name">${n.label}</span><span aria-hidden="true">&rsaquo;</span></a></li>`;
+      const row = (n) => `<li><a class="item" href="${n.href}"><span class="name">${n.label}${badgeHtml(n)}</span><span aria-hidden="true">&rsaquo;</span></a></li>`;
       root.innerHTML = `<div class="topbar"><h1>More</h1></div>
         <section class="card"><ul class="rowlist"><li><a class="item" href="#/places"><span class="name">Change place</span><span aria-hidden="true">&rsaquo;</span></a></li>${main.map(row).join('')}<li><a class="item" href="help.html" target="_blank" rel="noopener"><span class="name">Help</span><span aria-hidden="true">&rsaquo;</span></a></li></ul></section>
         ${adminLinks.length ? `<section class="card"><h2>Admin</h2><ul class="rowlist">${adminLinks.map(row).join('')}</ul></section>` : ''}
@@ -478,6 +509,12 @@
       if (segs[2] === 'edit') return { view: 'chemical', key: 'register', params: { id, edit: true, query } };
       return { view: 'chemical', key: 'register', params: { id, query } };
     }
+    if (segs[0] === 'audit' && segs[1]) {
+      if (segs[1] === 'new') return { view: 'auditnew', key: 'audits', params: { query } };
+      const id = segs[1];
+      const sub = { found: 'auditfound', summary: 'auditsummary', report: 'auditreport' }[segs[2]];
+      return { view: sub || 'audit', key: 'audits', params: { id, query } };
+    }
     return { view: segs[0], key: norm(segs[0]), params: { query } };
   }
 
@@ -497,7 +534,7 @@
     main.replaceChildren(root);
     window.scrollTo(0, 0);
     if (!def) {
-      const known = segs.length === 0 || NAV.some((n) => n.key === r.key) || r.view === 'label';
+      const known = segs.length === 0 || NAV.some((n) => n.key === r.key) || r.view === 'label' || segs[0] === 'audit';
       root.innerHTML = `<div class="empty-state"><h2>${known ? 'This screen is not available' : 'Page not found'}</h2><p>${known ? 'It could not be loaded. Try reloading the page.' : 'That address does not match anything here.'}</p><a class="btn primary" href="#/review">Go to the review list</a></div>`;
       document.title = App.companyName();
       return;
@@ -632,6 +669,9 @@
     }
     syncOffline();
     await route();
+    if (App.isAdmin() && !App.publicSettings.demo) {
+      App.api('/review').then((r) => { const k = (r && r.counts) || {}; App.setBadges({ findings: k.findings_open || 0, disposals: k.disposals_open || 0 }); }).catch(() => {});
+    }
   }
 
   let started = false;

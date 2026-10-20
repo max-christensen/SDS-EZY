@@ -217,12 +217,19 @@ export async function handleGetPlace(c) {
   const id = cleanId(c.p[0], "Place");
   const place = await env.DB.prepare(`SELECT ${PLACE_COLS} FROM places WHERE id = ?`).bind(id).first();
   if (!place) throw new ApiError(404, "Place not found");
-  const { results } = await env.DB.prepare(
-    `SELECT cp.id AS link_id, cp.place_id, cp.chemical_id, cp.quantity, cp.unit, cp.container_note, cp.spill_compound,
-            c.product_name, c.supplier, c.decision, c.ghs_classification, c.decision_override, c.pictograms_override, c.pictograms,
-            c.signal_word, c.risk_level, c.sds_id, c.sds_issue_date, c.review_due
-     FROM chemical_places cp JOIN chemicals c ON c.id = cp.chemical_id WHERE cp.place_id = ?`
-  ).bind(id).all();
+  const admin = c.user && c.user.role === "admin";
+  const auditsSql = `SELECT id, started_by_name, started_at, finished_at, status, summary FROM audits WHERE place_id = ? ${admin ? "" : "AND started_by = ? "}ORDER BY started_at DESC LIMIT 10`;
+  const [linkRes, lastRes, auditRes] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT cp.id AS link_id, cp.place_id, cp.chemical_id, cp.quantity, cp.unit, cp.container_note, cp.spill_compound,
+              c.product_name, c.supplier, c.decision, c.ghs_classification, c.decision_override, c.pictograms_override, c.pictograms,
+              c.signal_word, c.risk_level, c.sds_id, c.sds_issue_date, c.review_due
+       FROM chemical_places cp JOIN chemicals c ON c.id = cp.chemical_id WHERE cp.place_id = ?`
+    ).bind(id),
+    env.DB.prepare("SELECT last_audited_at FROM place_audit_summary WHERE place_id = ?").bind(id),
+    env.DB.prepare(auditsSql).bind(...(admin ? [id] : [id, c.user.id])),
+  ]);
+  const results = linkRes.results;
   const today = todayIso();
   const chemicals = results.map(r => {
     const cls = parseJson(r.ghs_classification, null);
@@ -237,7 +244,9 @@ export async function handleGetPlace(c) {
   }).sort((a, b) => String(a.product_name).toLowerCase().localeCompare(String(b.product_name).toLowerCase()) || a.link_id - b.link_id);
   const entries = results.map(r => entryOf(r, r.product_name));
   const result = computePlaceTotals([place], entries)[0];
-  return json({ place, chemicals, result });
+  const lastAudited = lastRes.results[0] ? lastRes.results[0].last_audited_at : null;
+  const audits = auditRes.results.map(a => ({ ...a, summary: parseJson(a.summary, null) }));
+  return json({ place: { ...place, last_audited_at: lastAudited }, chemicals, result, last_audited_at: lastAudited, audits });
 }
 
 // ---------------------------------------------------------------- manifest per place

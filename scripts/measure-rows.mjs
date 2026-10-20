@@ -1,7 +1,7 @@
 // Measures D1 rows read per request against a running LOCAL dev server started with DEBUG_ROWS=1:
 //   npx wrangler dev --local --port 8801 --persist-to .wrangler/agent-server --var DEBUG_ROWS:1
 //   node scripts/measure-rows.mjs [--base http://127.0.0.1:8801] [--sizes 60,600]
-// It creates three places (a workshop, a vehicle, a site; the first holds 20 chemicals) and tops the register up with synthetic "Measure NNNN" products (each with an SDS record, a place link, and an
+// It creates five places (workshop, ute, site, depot, van; the first holds 20 chemicals) and tops the register up with synthetic "Measure NNNN" products (each with an SDS record, a place link, and an
 // assessment on every second one) until the register holds each size, and prints the X-Rows-Read header for the key requests.
 // Admin login comes from MEASURE_EMAIL / MEASURE_PASSWORD (default: the test admin the server tests create).
 const arg = (n, d) => { const i = process.argv.indexOf("--" + n); return i > -1 ? process.argv[i + 1] : d; };
@@ -41,7 +41,7 @@ function pdfForm(i, data) {
 const placeIds = [];
 async function ensurePlaces() {
   const have = (await call("GET", "/api/places")).data;
-  for (const [name, type] of [["Measure Workshop", "workshop"], ["Measure Ute", "vehicle"], ["Measure Site", "site"]]) {
+  for (const [name, type] of [["Measure Workshop", "workshop"], ["Measure Ute", "vehicle"], ["Measure Site", "site"], ["Measure Depot", "workshop"], ["Measure Van", "vehicle"]]) {
     const f = have.find(p => p.name === name && p.place_type === type);
     placeIds.push(f ? f.id : (await call("POST", "/api/places", { name, place_type: type })).data.id);
   }
@@ -106,3 +106,53 @@ for (const size of SIZES) {
   row("GET /api/pack (30 chem)", pack30);
   results.push({ size, total });
 }
+
+// ---------------------------------------------------------------- audits (run once, after the sizes above)
+console.log("--- audits ---");
+const synth = (await call("GET", "/api/chemicals?limit=2000")).data.items.filter(c => c.product_name.startsWith("Measure item")).map(c => c.id);
+const uid = () => crypto.randomUUID();
+const have2 = (await call("GET", "/api/places")).data;
+async function auditPlace(name, n) {
+  let p = have2.find(x => x.name === name);
+  if (!p) {
+    const id = (await call("POST", "/api/places", { name, place_type: "workshop" })).data.id;
+    for (const cid of synth.slice(0, n)) await call("POST", `/api/places/${id}/chemicals`, { chemical_id: cid, quantity: 5, unit: "L" });
+    p = { id };
+  }
+  return p.id;
+}
+const p17 = await auditPlace("Measure Audit17", 17);
+const p62 = await auditPlace("Measure Audit62", 62);
+const row = (k, r) => console.log(`${k.padEnd(34)}rows_read=${r.rows}  (status ${r.status})`);
+const s17 = await call("POST", "/api/audits", { place_id: p17, client_id: uid(), started_at: new Date().toISOString() });
+row("start audit (17 chemicals)", s17);
+const s62 = await call("POST", "/api/audits", { place_id: p62, client_id: uid(), started_at: new Date().toISOString() });
+row("start audit (62 chemicals)", s62);
+const a17 = s17.data.audit.id, a62 = s62.data.audit.id;
+let ms = null;
+for (const it of s17.data.items) ms = await call("PUT", `/api/audits/${a17}/items/${it.chemical_id}`, { result: "not_found", marked_at: new Date().toISOString() });
+row("mark one item", ms);
+for (const it of s62.data.items.slice(0, 3)) await call("PUT", `/api/audits/${a62}/items/${it.chemical_id}`, { result: "not_found", marked_at: new Date().toISOString() });
+for (let i = 0; i < 3; i++) await call("POST", `/api/audits/${a17}/found`, { client_id: uid(), product_name: `Measure found ${i}`, action: "record", found_at: new Date().toISOString() });
+const dids = [uid(), uid()];
+for (const d of dids) await call("POST", `/api/audits/${a17}/disposals`, { client_id: d, description: "Old drum", reason: "expired", flagged_at: new Date().toISOString() });
+const jpeg = new Uint8Array(150000); jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
+for (let i = 0; i < 12; i++) {
+  const fd = new FormData();
+  fd.append("file", new Blob([jpeg], { type: "image/jpeg" }), "p.jpg"); fd.append("client_id", uid());
+  fd.append("owner_type", i < 3 ? "disposal" : "item"); fd.append("owner_key", i < 3 ? dids[0] : String(s17.data.items[i % 17].chemical_id));
+  fd.append("taken_at", new Date().toISOString());
+  const r = await call("POST", `/api/audits/${a17}/photos`, fd);
+  if (i === 0) row("upload one photo", r);
+}
+row("finish audit (17 items)", await call("POST", `/api/audits/${a17}/finish`, { finished_at: new Date().toISOString() }));
+await call("POST", `/api/audits/${a62}/finish`, { finished_at: new Date().toISOString() });
+row("GET /api/audits/:id (report)", await call("GET", `/api/audits/${a17}`));
+row("GET /api/findings (open)", await call("GET", "/api/findings"));
+row("GET /api/disposals", await call("GET", "/api/disposals"));
+row("GET /api/review (with new group)", await call("GET", "/api/review"));
+row("GET /api/places/:id (history)", await call("GET", `/api/places/${p17}`));
+row("GET /api/audits (list)", await call("GET", "/api/audits"));
+const rep = (await call("GET", `/api/audits/${a17}`)).data;
+console.log(`open findings: ${(await call("GET", "/api/findings?limit=500")).data.length}; photos on report: ${rep.photos.length}; ` +
+  `R2 storage for that audit = SUM(bytes) = ${rep.photos.reduce((n, p) => n + p.bytes, 0)} bytes (summary.photo_bytes = ${rep.audit.summary && rep.audit.summary.photo_bytes})`);

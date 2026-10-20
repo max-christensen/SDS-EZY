@@ -19,7 +19,7 @@ emailed code. In the demo Worker (`DEMO_MODE=1`) every write is blocked for both
 
 ## What is in it (for `--today 2026-10-19`; the counts stay the same for any date)
 
-* **66 chemicals**: 50 hazardous, 15 not hazardous, 1 with no decision yet (the two-stroke fuel mix, which is **not classified**: `ghs_classification` is NULL).
+* **67 chemicals**: 50 hazardous, 15 not hazardous, 2 with no decision yet (the two-stroke fuel mix, which is **not classified**: `ghs_classification` is NULL; and the "needs an SDS" placeholder found during the Ute 2 audit).
 * **GHS classification** (Safe Work Australia poster table, `public/lib/ghs-ref.mjs`) on every chemical, stored as JSON in `ghs_classification`; `decision`, `signal_word` and `pictograms`
   are the effective values from `effective()`. Non-hazardous products are `[]`. Examples: lacquer thinners = Flam. Liq. 2, Asp. Tox. 1, Skin Irrit. 2, Eye Irrit. 2A, STOT SE 3, Repr. 2, STOT RE 2;
   battery acid = Skin Corr. 1A + Met. Corr. 1; cement = Skin Irrit. 2, Eye Dam. 1, Skin Sens. 1, STOT SE 3; spray paints = Aerosol 1.
@@ -34,14 +34,14 @@ emailed code. In the demo Worker (`DEMO_MODE=1`) every write is blocked for both
 * **SDS version history**: Marlow Methylated Spirits, v1 (replaced) and v2 (current); the chemical page shows the history and an older assessment.
 * **Review status**: 5 past the five-year review date (overdue), 4 due within 90 days, 55 in date, 1 SDS with no issue date (unknown), 1 chemical with no SDS.
 * **Risk levels** (current assessment): 25 not significant, 33 significant but controlled, 4 significant and not controlled, 3 uncertain (one is a blank assessment, one has no SDS), plus 1 chemical with no assessment at all (the soldering flux).
-* **Places** (5, ids fixed so links stay valid after seeding) and **108 chemical links** (`chemical_places`; `places.chemical_count` matches the links; the legacy `storage_locations` table is not written):
+* **Places** (5, ids fixed so links stay valid after seeding) and **109 chemical links** (`chemical_places`; `places.chemical_count` matches the links; the legacy `storage_locations` table is not written):
 
   | id | Place | Type | Counts toward totals | Chemicals | Notes |
   |---|---|---|---|---|---|
   | 1 | Tallowood workshop | workshop | yes | 62 | gas cage, fuel cube, flammables cabinets, paint, maintenance, cleaners, plaster and yard stock |
   | 2 | Harbour Road job site | site | yes | 11 | heaters, cutting kit, aerosols, a few finishing products |
   | 3 | Ute 1 (rego TWD 001) | vehicle | no | 15 | painting and finishing kit |
-  | 4 | Ute 2 (rego TWD 002) | vehicle | no | 17 | maintenance, cleaning and aerosol kit |
+  | 4 | Ute 2 (rego TWD 002) | vehicle | no | 18 | maintenance, cleaning and aerosol kit |
   | 5 | Ute 3 (sold) (rego TWD 003) | vehicle, **archived** | no | 3 | keeps its links on record, is not totalled |
 
   Every chemical is kept in at least one place (35 are in two or more). Some links have no quantity (hand cleaner in both utes, glass cleaner in Ute 2, the plaster patch compound on site). Quantities are in L and kg; a link with a quantity always has a unit.
@@ -69,14 +69,41 @@ Totals are per place, never across the business. Vehicles and the archived place
 ### Sample job pack
 
 Open (after signing in as either demo login): `#/pack?place=4&client=Smith%20Street%20Primary%20School&ref=JOB-1042&date=2026-10-19`
-(`make-demo` writes the exact link, with the build date, to `demo-out/summary.json` as `sample_pack`). It builds a pack from **Ute 2** (id 4, 17 chemicals: aerosols, adhesives, cleaning products, petrol, diesel cans, rust converter and so on).
+(`make-demo` writes the exact link, with the build date, to `demo-out/summary.json` as `sample_pack`). It builds a pack from **Ute 2** (id 4, 18 chemicals: aerosols, adhesives, cleaning products, petrol, diesel cans, rust converter and so on).
 It is built to show the "missing" wording:
 
-* **No SDS on file**: "Concrete Sealer (solvent-based, unlabelled tin)" (chemical id 66). It is classified by an admin from the can, and has an assessment.
-* **No assessment on file**: "Wattlebird Soldering Flux Paste" (chemical id 38). It has an SDS but no assessment row at all.
+* **No SDS on file**: "Concrete Sealer (solvent-based, unlabelled tin)" (chemical id 66, classified by an admin from the can, has an assessment) and the audit placeholder "Rapidset Tile Adhesive (found on Ute 2, needs an SDS)" (id 67).
+* **No assessment on file**: "Wattlebird Soldering Flux Paste" (id 38, has an SDS) and the placeholder (id 67).
 * Everything else in Ute 2 has an SDS and an assessment; two of its SDS are past their review date (brake cleaner and the neutral cure silicone sealant) so the review badge is also visible.
 
 Issue dates are computed from the build date (`--today`), so the overdue/due-soon counts do not drift as time passes.
+
+### Audits (the audit story)
+
+Three audits are seeded (tables `audits`, `audit_items`, `audit_found`, `audit_disposals`, `audit_findings`, `audit_photos`, `place_audit_summary`; built by `scripts/demo/audits.mjs`, dates relative to `--today`).
+Links assume the demo is signed in as the user named; the demo admin sees all three, `demo-user` sees only its own (audits 1 and 2).
+
+| id | Place | Who | When | State | Open it |
+|---|---|---|---|---|---|
+| 1 | Ute 2 (id 4) | demo-user | 3 days ago, 09:10 to 10:05 | **finished** | `#/audit/1/summary`, report `#/audit/1/report` |
+| 2 | Tallowood workshop (id 1) | demo-user | started today 08:30 | **in progress**, 21 of 62 marked | `#/audit/2` |
+| 3 | Tallowood workshop (id 1) | demo-admin | 130 days ago | finished (older than the 90-day reminder) | `#/audit/3/report` (admin) |
+
+Lists: `#/audits` (my audits; the admin sees all), `#/findings` and `#/disposals` (admin). Place pages: `#/place/4` (Ute 2, last audited 3 days ago) and `#/place/1` (workshop, last audited 130 days ago).
+
+**Audit 1 (Ute 2, completed).** 17 items (the chemicals linked when it started): 15 present, 1 **not found** (the 5 L liquid chlorine bottle), 1 **changed** (petrol 10 L, now 5 L in a "half-used 10 L jerry can");
+notes on the petrol, the cracked soldering flux and the unlabelled concrete sealer. Items are listed out-of-date first (overdue, due soon, no SDS, then the rest).
+Two **found items**: a tile adhesive that is not on the register became a "needs an SDS" placeholder chemical (chemical id 67, `source = "audit"`, no SDS, no classification, no decision, no assessment, linked to Ute 2 with no quantity, so Ute 2 now has 18 links);
+a dishwashing detergent matched an existing chemical (outcome `link_suggested`, because a user cannot link: it became a `found_link` finding and is **not** linked to Ute 2 yet).
+Two **disposals**: expired brake cleaner (open, to dispose, with a photo) and a cracked drain-unblocker bottle (disposed: closed by demo-admin the next day with a note and a closing photo).
+Summary JSON: `{listed 17, present 15, not_found 1, changed 1, not_marked 0, found 2, disposals 2, photos 9, photo_bytes}` (the closing photo was added a day after the audit finished, so it is not in the summary count; it is in the report).
+**Findings**: open = 1 not_found (liquid chlorine), 1 changed (petrol), 1 found_link (dishwashing detergent). From audit 3 (the old workshop walk-round): 1 **accepted** (turpentine quantity changed, already reflected on its link) and 1 **dismissed** (hand cleaner "not found", still on the register), so all three states show.
+
+**Photos**: 11 fictional JPEGs in total (640 x 480, about 30 KB each), drawn cartoons of a tin, jerry can, tub, bottle, aerosol or shelf on a bench with a blocky-text label and "FICTIONAL DEMO PHOTO" in the corner (generated with `jpeg-js`, no real brands or people).
+10 on audit 1 (3 item photos, 3 on found items, 2 on disposals, 1 closing photo, 1 audit-level shelf photo) and 1 on audit 2. Storage per audit (R2 bytes): audit 1 about 320 KB, audit 2 about 34 KB (well under the 40 MB cap). Files are in `demo-out/photos/audits/<audit id>/<uuid>.jpg` and `seed-demo-local.mjs` uploads them to the local bucket under the same `audits/<id>/<uuid>.jpg` key.
+
+**Reminders** (90 days): the Review home's "not audited" list shows the workshop (130 days), the Harbour Road job site and Ute 1 (never). Ute 2 is recent, and the archived ute is excluded.
+Chemical counts after the audit: 67 chemicals (50 hazardous, 15 not hazardous, 2 with no decision: the two-stroke mix and the audit placeholder), 109 links.
 
 ## Build and load locally
 
@@ -131,7 +158,7 @@ deliberately, when you are ready:
    wrangler d1 execute DB --remote -c wrangler.demo.toml --file=./demo-out/demo.sql
    ```
 
-5. Upload the PDFs to the demo bucket, one per `sds.r2_key` (keys look like `sds/7-692d1df48391.pdf`):
+5. Upload the PDFs (and, afterwards, the audit photos: same loop over `demo-out/photos/audits/*/*.jpg` with key `audits/<id>/<file>` and `--content-type image/jpeg`) to the demo bucket, one per `sds.r2_key` (keys look like `sds/7-692d1df48391.pdf`):
 
    ```bash
    for f in demo-out/pdfs/sds/*.pdf; do
@@ -171,4 +198,4 @@ cached in `seed-local/answer-key-cache/` (`--no-cache` to skip). With the files 
 ## Tests
 
 `npm test` runs `tests/demo-data.test.mjs` (loads the generated SQL into an in-memory SQLite via `node:sqlite` after `schema.sql`; needs Node 22.5 or newer, otherwise it
-skips with a message) and `tests/demo-answer-key.test.mjs` (parsers against synthetic stand-ins, privacy checks, and the `--remote` refusal).
+skips with a message) `tests/demo-audits.test.mjs` (the audit story against `schema.sql`: counts, visibility, findings match items, summary JSON matches rows, every photo decodes as a JPEG, the reminder list, R2 bytes per audit) and `tests/demo-answer-key.test.mjs` (parsers against synthetic stand-ins, privacy checks, and the `--remote` refusal).

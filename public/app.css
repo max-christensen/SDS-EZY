@@ -414,3 +414,17 @@ button.big, a.btn.big { min-height: 52px; font-size: 16px; padding: 12px 18px; w
 .update-bar button { background: #fff; color: #1F2A24; border-color: #fff; }
 @media (max-width: 860px) { .update-bar { top: auto; bottom: calc(58px + env(safe-area-inset-bottom)); border-top: 1px solid #6b644d; } }
 @media print { .update-bar { display: none !important; } }
+
+.navbadge { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; border-radius: 10px; background: #D9A400; color: #1F2A24; font-size: 12px; font-weight: 700; text-align: center; line-height: 20px; vertical-align: 1px; }
+.rowlist .navbadge { background: var(--warn-bg); color: var(--warn); border: 1px solid #E8D4A0; }
+.tiles.wide { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.audit-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+.photo-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.photo-row a { display: block; }
+.photo-row img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); background: #eee; }
+.fcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+.fcard .what { font-size: 16px; font-weight: 700; margin: 4px 0; overflow-wrap: anywhere; }
+.fcard .meta { color: var(--muted); font-size: 13.5px; }
+.fcard .note { margin: 8px 0 0; padding: 8px 10px; background: #FAF9F5; border-left: 3px solid var(--border); font-size: 14px; }
+.seg { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.seg button[aria-pressed=true] { background: var(--main); color: var(--on-main); border-color: var(--main); }

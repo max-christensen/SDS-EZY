@@ -173,6 +173,58 @@
     return { sheet: "Assessments", data, columns: widths(ASSESS_W) };
   }
 
+  // ---- audits (only what the server returned: a user's export holds only their own audits)
+  const AUDIT_STATUS = { in_progress: "In progress, not finished", finished: "Finished" };
+  const RESULT = { present: "Present", not_found: "Not found", changed: "Changed" };
+  const OUTCOME = { linked: "Linked to this place", link_suggested: "Link suggested to an admin", created: "Added to the register (needs an SDS)", recorded: "Recorded only" };
+  const REASON = { expired: "Expired", unlabelled: "Unlabelled", damaged: "Damaged", unknown: "Unknown contents", no_sds: "No SDS" };
+  const DSTATUS = { to_dispose: "To be disposed of", disposed: "Disposed of" };
+  const FKIND = { not_found: "Not found: unlink from the place", changed: "Changed: update quantity or container", found_link: "Found: link to the place" };
+  const auditPlace = (model) => { const m = new Map(); (model.audits || []).forEach((a) => m.set(Number(a.id), a)); return m; };
+  const when = (iso) => (iso ? String(iso).replace("T", " ").replace(/:\d\d(\.\d+)?Z?$/, "") : "");
+
+  function auditsSheet(model, D) {
+    const { M, ML } = libs();
+    const data = top(model, "Audits", D, ML);
+    data.push(head(["Audit", "Place", "Type", "Registration", "Status", "Audited by", "Started", "Finished", "Chemicals listed", "Present", "Not found", "Changed", "Not marked", "Found items", "For disposal", "Photos", "Photo storage (MB)", "Notes"]));
+    (model.audits || []).forEach((a) => {
+      const x = M.auditSummary(model, a);
+      data.push([num(a.id), str(a.place_name), str(a.place_type), str(a.place_registration), str(AUDIT_STATUS[a.status] || a.status), str(a.started_by_name), str(when(a.started_at)), str(when(a.finished_at)), num(x.listed), num(x.present), num(x.not_found), num(x.changed), num(x.not_marked), num(x.found), num(x.disposals), num(x.photos), num(Math.round((x.photo_bytes / 1048576) * 100) / 100), str(a.notes)]);
+    });
+    if (!(model.audits || []).length) data.push([str("No audits have been recorded (or none are visible to you).")]);
+    return { sheet: "Audits", data, columns: widths([8, 28, 12, 12, 22, 20, 18, 18, 10, 9, 9, 9, 9, 9, 9, 8, 12, 40]) };
+  }
+  function auditItemsSheet(model, D) {
+    const { M, ML } = libs();
+    const data = top(model, "Audit items", D, ML);
+    data.push(head(["Audit", "Place", "Product", "Supplier", "Result", "Expected quantity", "Unit", "Expected container", "Now quantity", "Now unit", "Now container", "Note", "SDS review then", "Review due", "SDS on file", "Assessment on file", "Marked"]));
+    const am = auditPlace(model);
+    (model.auditItems || []).forEach((i) => { const a = am.get(Number(i.audit_id)) || {}; data.push([num(i.audit_id), str(a.place_name), str(i.product_name), str(i.supplier), str(RESULT[i.result] || "Not marked"), num(i.expected_quantity), str(i.expected_unit), str(i.expected_container_note), num(i.new_quantity), str(i.new_unit), str(i.new_container_note), str(i.note), str(M.STATUS_LABEL[i.review_status] || i.review_status), str(M.fmtDate(i.review_due)), str(i.has_sds ? "Yes" : "No"), str(i.has_assessment ? "Yes" : "No"), str(when(i.marked_at))]); });
+    return { sheet: "Audit items", data, columns: widths([8, 26, 30, 22, 12, 11, 7, 18, 11, 8, 18, 36, 16, 14, 9, 11, 18]) };
+  }
+  function auditFoundSheet(model, D) {
+    const { ML } = libs();
+    const data = top(model, "Found items", D, ML);
+    data.push(head(["Audit", "Place", "Product", "Supplier", "Identified", "What happened", "Note", "Found"]));
+    const am = auditPlace(model);
+    (model.auditFound || []).forEach((f) => { const a = am.get(Number(f.audit_id)) || {}; data.push([num(f.audit_id), str(a.place_name), str(f.product_name), str(f.supplier), str(f.source === "ai" ? "Read from the label photo" : "Typed in"), str(OUTCOME[f.outcome] || f.outcome), str(f.note), str(when(f.found_at))]); });
+    return { sheet: "Found items", data, columns: widths([8, 26, 30, 22, 22, 32, 36, 18]) };
+  }
+  function auditDisposalsSheet(model, D) {
+    const { ML } = libs();
+    const data = top(model, "Disposals", D, ML);
+    data.push(head(["Audit", "Place", "Item", "Reason", "Note", "Status", "Flagged by", "Flagged", "Closed by", "Closed", "Closing note"]));
+    (model.auditDisposals || []).forEach((d) => data.push([num(d.audit_id), str(d.place_name), str(d.description), str(REASON[d.reason] || d.reason), str(d.note), str(DSTATUS[d.status] || d.status), str(d.flagged_by_name), str(when(d.flagged_at)), str(d.closed_by_name), str(when(d.closed_at)), str(d.close_note)]));
+    return { sheet: "Disposals", data, columns: widths([8, 26, 32, 18, 30, 18, 18, 18, 18, 18, 30]) };
+  }
+  function auditFindingsSheet(model, D) {
+    const { ML } = libs();
+    const data = top(model, "Findings", D, ML);
+    data.push(head(["Audit", "Place", "What", "Product", "Status", "Resolved by", "Resolved", "Resolution note"]));
+    (model.auditFindings || []).forEach((f) => data.push([num(f.audit_id), str(f.place_name), str(FKIND[f.kind] || f.kind), str(f.product_name), str(f.status), str(f.resolved_by_name), str(when(f.resolved_at)), str(f.resolve_note)]));
+    return { sheet: "Findings", data, columns: widths([8, 26, 36, 30, 12, 18, 18, 36]) };
+  }
+
   function reviewSheet(model, D) {
     const { M, ML } = libs();
     const data = top(model, "Safety data sheets due for review", D, ML);
@@ -188,8 +240,8 @@
   // model: export-model.normalise(); D: window.DISCLAIMER; opts: {ref, totals, layout}
   function buildSheets(model, D, opts) {
     const o = opts || {};
-    return [registerSheet(model, D, o), hazardousSheet(model, D, o), placesSheet(model, D), placeLinksSheet(model, D), manifestSheet(model, D, o), itemsSheet(model, D, o), issuesSheet(model, D, o), assessmentsSheet(model, D), reviewSheet(model, D)];
+    return [registerSheet(model, D, o), hazardousSheet(model, D, o), placesSheet(model, D), placeLinksSheet(model, D), manifestSheet(model, D, o), itemsSheet(model, D, o), issuesSheet(model, D, o), assessmentsSheet(model, D), reviewSheet(model, D), auditsSheet(model, D), auditItemsSheet(model, D), auditFoundSheet(model, D), auditDisposalsSheet(model, D), auditFindingsSheet(model, D)];
   }
 
-  return { buildSheets, registerSheet, hazardousSheet, placesSheet, placeLinksSheet, manifestSheet, itemsSheet, issuesSheet, assessmentsSheet, reviewSheet };
+  return { buildSheets, registerSheet, hazardousSheet, placesSheet, placeLinksSheet, manifestSheet, itemsSheet, issuesSheet, assessmentsSheet, reviewSheet, auditsSheet, auditItemsSheet, auditFoundSheet, auditDisposalsSheet, auditFindingsSheet };
 });
