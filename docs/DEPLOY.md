@@ -1,7 +1,6 @@
 # Deploying SDS EZY (the Deploy to Cloudflare button, and by hand)
 
-This follows the same pattern as the Wrangla project: a committed `wrangler.toml` of placeholders, a `deploy` script that loads the
-database tables and then deploys, and a README button that points at the repository.
+This follows the same pattern as the Wrangla project: a committed `wrangler.toml` of placeholders, a `deploy` script, and a README button that points at the repository.
 
 ## What the button does
 
@@ -20,16 +19,25 @@ documentation ("Deploy buttons"), it:
 ## What runs on every deploy (`npm run deploy`)
 
 ```
-npm run predeploy      node scripts/bump-version.mjs     writes public/app-version.js (a hash of the app files) so phones replace their cached copy
-npm run db:init        wrangler d1 execute DB --remote --yes --file=./schema.sql
+npm run predeploy      node scripts/bump-version.mjs && node scripts/build-schema.mjs
+                       writes public/app-version.js (a hash of the app files) so phones replace their cached copy,
+                       and src/schema.generated.js (schema.sql split into statements)
 wrangler deploy
 ```
 
-* **The schema runs on every deploy and is safe to repeat.** `schema.sql` is `CREATE ... IF NOT EXISTS` and `INSERT OR IGNORE`, plus one migration that
+* **The Worker creates its own tables.** The first request after a deploy checks a `schema_hash` row in the `settings` table; if it is missing or
+  differs from the hash of `schema.sql`, the Worker runs the statements in `src/schema.generated.js` and stores the new hash. On a fresh database that
+  creates everything, on an existing one it is a no-op or a safe upgrade, and each Worker instance checks only once. Nothing about the database is
+  needed at build time.
+* **Why there is no `db:init` step in `deploy` (error 7404).** An earlier version ran `wrangler d1 execute DB --remote --yes --file=./schema.sql` before
+  `wrangler deploy`. On the button's first build that failed with `The database ... could not be found [code: 7404]`, because the build ran the
+  command before the database it had just been given was usable. Not depending on the database during the build removes the failure. `npm run db:init`
+  remains for loading the schema by hand; it does the same thing as the Worker's own check.
+
+* **The schema is safe to repeat.** `schema.sql` is `CREATE ... IF NOT EXISTS` and `INSERT OR IGNORE`, plus one migration that
   copies the old single-workplace storage locations into places and then clears that legacy table (so on a fresh database it does nothing, and after the
   first run it is a no-op). It never drops or alters a table. Tests check this, including that a link someone deleted later is not brought back.
-* The command refers to the database by its **binding name** (`DB`), not its name, as Cloudflare's documentation advises, because the button
-  can rename resources.
+* `npm run db:init` refers to the database by its **binding name** (`DB`), not its name, because the button can rename resources.
 * **First run from a fresh deploy needs nothing configured.** No `SETUP_KEY` and no `SESSION_SECRET`: the first person to open the Worker
   address creates the admin account (the setup closes itself once an admin exists), and the signing key is generated on first use and kept in the
   database. Reading safety data sheets uses Workers AI with no setup. Optional extras (a setup key, your own AI key, emailed sign-in codes) are in
@@ -47,12 +55,14 @@ who works on the code and wants their own IDs in that file has three safe option
 
 1. **Don't edit it (the safest).** Put your own settings in `wrangler.local.toml` (git-ignored) and pass it to Wrangler with `-c`. `npm run dev` and
    `npm run db:init:local` (and the demo seed script) already do this for you when that file exists. The `npm run deploy` and `npm run db:init` scripts
-   deliberately use the plain `wrangler.toml` (that is what the button runs), so to deploy to YOUR OWN account with your real IDs, run the two steps yourself:
+   deliberately use the plain `wrangler.toml` (that is what the button runs), so to deploy to YOUR OWN account with your real IDs, run the steps yourself (`npm run predeploy` first, so phones replace their cached copy and the schema file is current):
    ```
-   npx wrangler d1 execute DB --remote --yes --file=./schema.sql -c wrangler.local.toml
    npx wrangler deploy -c wrangler.local.toml
    ```
-   (and run `node scripts/bump-version.mjs` first, as `npm run predeploy` does, so phones replace their cached copy).
+   The tables are created by the Worker on its first request. To load them straight away instead:
+   ```
+   npx wrangler d1 execute DB --remote --yes --file=./schema.sql -c wrangler.local.toml
+   ```
 2. **Edit `wrangler.toml` locally and tell git to ignore your edits:** `git update-index --skip-worktree wrangler.toml`. Git then keeps the
    committed placeholder in its index and does not compare or commit your working copy. (To undo: `git update-index --no-skip-worktree wrangler.toml`.)
    **This is optional and fragile.** Any git operation that has to change `wrangler.toml` (a pull or rebase where the placeholder changed upstream, `git stash`,
@@ -73,12 +83,12 @@ state is keyed by the config's `database_id`: two different configs would give y
 ## What can only be tested with a real deploy
 
 * That the button accepts this repository and its placeholder ID (it needs the repository to be public).
-* Provisioning of the D1 database and R2 bucket in a real account, and `db:init` succeeding with the build's permissions (`wrangler d1 execute DB --remote`).
+* Provisioning of the D1 database and R2 bucket in a real account, and the Worker creating its tables on the first request against the freshly provisioned database.
 * The Workers AI binding and reading a real SDS with it, R2 serving real files, the service worker and "Add to Home Screen" on a `workers.dev` HTTPS address.
 * Resend (emailed sign-in codes) and any custom domain.
 
 ## Testing a fresh deploy without deploying (smoke test)
 
-The simulation cannot prove the items in the list above (the real button flow, real resource provisioning, `wrangler d1 execute --remote` inside Workers Builds, Workers AI, HTTPS on `workers.dev`), but everything else about a fresh deploy from the committed files can be rehearsed locally:
+The simulation cannot prove the items in the list above (the real button flow, real resource provisioning, Workers AI, HTTPS on `workers.dev`), but everything else about a fresh deploy from the committed files can be rehearsed locally:
 
 `node scripts/smoke-fresh-clone.mjs [--keep] [--ref <git ref>]` (about 30 seconds after the npm install) makes a fresh clone of the committed files in a temporary folder with LF line endings (as the Linux builder behind the button has), runs `npm ci`, the placeholder and cache-version checks, the deploy-related tests and `wrangler deploy --dry-run`, applies `schema.sql` twice to a local database, starts `npm run dev` with no secrets and no AI binding, and walks the first-run path (setup, second setup refused, sign-in, signing key stored but never returned, place, chemical, logo and PDF in R2, plain user cannot write, audit, review). It prints a PASS/FAIL table and exits 1 on any failure; `--keep` keeps the temporary folder. It uses only `--local` and `--dry-run` Wrangler commands and never touches your `wrangler.local.toml` or `.dev.vars`.

@@ -110,7 +110,7 @@ Two things in the app are **our understanding, not something the Safe Work Austr
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/max-christensen/SDS-EZY)
 
-**Using the button:** it makes your own copy of this repository in your GitHub (or GitLab) account, creates the Worker, the D1 database and the R2 bucket in your Cloudflare account from [wrangler.toml](wrangler.toml), and runs the deploy script, which loads the database tables for you (it runs [schema.sql](schema.sql), which is safe to run on every deploy). Nothing to run afterwards.
+**Using the button:** it makes your own copy of this repository in your GitHub (or GitLab) account, creates the Worker, the D1 database and the R2 bucket in your Cloudflare account from [wrangler.toml](wrangler.toml), and runs the deploy script. The Worker creates its own database tables the first time it runs (from [schema.sql](schema.sql), which is safe to repeat), so there is nothing to run afterwards.
 
 The button needs nothing typed in. **Open your Worker's address straight after it deploys and create the admin account** (see [First run](#first-run)). Until an admin exists, the first person to open the setup screen becomes the admin, so don't leave it. For extra protection, see [Optional secrets](#optional-secrets). Reading safety data sheets works straight away with Cloudflare Workers AI; see [Choosing the AI](#choosing-the-ai) to use your own key instead.
 
@@ -220,7 +220,7 @@ Run the tests with `npm test` (Node 22.13 or newer, because some use Node's buil
 ```
 npm run deploy
 ```
-There is no downtime and no server to restart. If you used the button, your copy is connected to Cloudflare, which rebuilds and redeploys automatically each time the connected branch of your copy changes, running the same deploy script (so the tables are brought up to date safely every time). If a newer version changes the database tables, its release notes will say what to run. To keep a backup of your data: `npx wrangler d1 export sds-ezy-db --remote --output=backup.sql` (the PDFs are in the `sds-ezy-files` bucket).
+There is no downtime and no server to restart. If you used the button, your copy is connected to Cloudflare, which rebuilds and redeploys automatically each time the connected branch of your copy changes, running the same deploy script (and the Worker brings the tables up to date safely the first time it runs after each deploy). If a newer version changes the database tables, that happens by itself. To keep a backup of your data: `npx wrangler d1 export sds-ezy-db --remote --output=backup.sql` (the PDFs are in the `sds-ezy-files` bucket).
 
 ## Notes for contributors
 

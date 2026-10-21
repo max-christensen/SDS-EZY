@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "vendor": "node scripts/vendor.mjs",
-    "deploy": "npm run db:init && wrangler deploy",
+    "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute DB --remote --yes --file=./schema.sql",
     "db:init:local": "node scripts/dev.mjs --wrangler d1 execute DB --local --file=./schema.sql",
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
@@ -15,7 +15,7 @@
     "demo:seed:local": "node scripts/seed-demo-local.mjs",
     "answer-key": "node scripts/answer-key.mjs",
     "answer-key:selftest": "node scripts/answer-key.mjs --self-test",
-    "predeploy": "node scripts/bump-version.mjs",
+    "predeploy": "node scripts/bump-version.mjs && node scripts/build-schema.mjs",
     "check:version": "node scripts/bump-version.mjs --check",
     "make:icons": "node scripts/make-icons.mjs",
     "check:deploy-config": "node scripts/check-deploy-config.mjs",
@@ -35,7 +35,7 @@
   "cloudflare": {
     "bindings": {
       "DB": {
-        "description": "The SDS EZY database. Created for you in your Cloudflare account; the tables are loaded on every deploy and nothing is lost when you redeploy."
+        "description": "The SDS EZY database. Created for you in your Cloudflare account; the tables are created and brought up to date by the Worker itself the first time it runs after each deploy, and nothing is lost when you redeploy."
       },
       "FILES": {
         "description": "Storage for the safety data sheet PDFs, audit photos and your logo (an R2 bucket). Created for you. R2 may ask for a payment method before it can be switched on, even though normal use stays inside the free allowance."

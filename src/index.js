@@ -18,6 +18,7 @@ import { handleImport } from "./import.js";
 import { handlePrecheck, handleUpload } from "./upload.js";
 import { handleGetAiSettings, handlePutAiSettings, handleTestAi } from "./ai.js";
 import { handleTestVision } from "./label.js";
+import { ensureSchema } from "./schema.js";
 
 const ID = "(\\d+)";
 const USER_WRITES = new Set([
@@ -150,6 +151,9 @@ export default {
   async fetch(request, rawEnv) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return rawEnv.ASSETS.fetch(request);
+
+    try { await ensureSchema(rawEnv); }
+    catch (e) { console.error("schema setup failed", e); return json({ error: "The database could not be set up. Check that the D1 database is attached to this Worker, then reload." }, 500); }
 
     const counter = { n: 0 };
     const debug = rawEnv.DEBUG_ROWS === "1";

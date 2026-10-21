@@ -55,12 +55,13 @@ test("the bindings the code needs are all in wrangler.toml, and it uses no old o
   assert.ok(!used.has("ATTACHMENTS"), "the old ATTACHMENTS binding is still referenced");
 });
 
-test("package.json: the deploy script loads the schema (by binding name) before deploying, and bumps the cache version first", () => {
+test("package.json: the deploy script is a plain wrangler deploy (no build-time database step); the Worker sets up its own tables", () => {
   const p = JSON.parse(read("package.json"));
-  assert.equal(p.scripts.deploy, "npm run db:init && wrangler deploy");
+  assert.equal(p.scripts.deploy, "wrangler deploy", "a build-time D1 step fails on a fresh button deploy (error 7404)");
+  assert.ok(!/db:init|d1 execute/.test(p.scripts.deploy + p.scripts.predeploy), "deploy and predeploy must not touch the remote database");
   assert.equal(p.scripts["db:init"], "wrangler d1 execute DB --remote --yes --file=./schema.sql");
   assert.ok(!/sds-ezy-db/.test(p.scripts["db:init"]), "reference the DB binding, not the database name (the button renames resources)");
-  assert.equal(p.scripts.predeploy, "node scripts/bump-version.mjs");
+  assert.equal(p.scripts.predeploy, "node scripts/bump-version.mjs && node scripts/build-schema.mjs");
   // The local schema step goes through dev.mjs so it uses the SAME config (and so the same local database) as `npm run dev`.
   assert.match(p.scripts["db:init:local"], /^node scripts\/dev\.mjs --wrangler d1 execute DB --local .*schema\.sql/);
   assert.equal(p.scripts.dev, "node scripts/dev.mjs");
@@ -155,6 +156,7 @@ test("the hook installer asks git where hooks live (worktrees, core.hooksPath) a
 
 test("docs/DEPLOY.md does not overstate the schema, and says how to deploy with your own local config", () => {
   const d = read("docs/DEPLOY.md");
+  assert.match(d, /7404/);
   assert.match(d, /clears that legacy table/, "the doc must mention that one migration copies and then clears the legacy table");
   assert.match(d, /wrangler deploy -c wrangler\.local\.toml/);
   assert.match(d, /d1 execute DB --remote --yes --file=\.\/schema\.sql -c wrangler\.local\.toml/);
