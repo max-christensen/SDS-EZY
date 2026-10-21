@@ -7,7 +7,7 @@ Spec: `docs/PLACES-CHANGE.md` ("Installable, and offline for read"). Offline is 
 | File | What it does |
 |---|---|
 | `public/manifest.webmanifest` | Name, `start_url` `/`, scope `/`, standalone, theme colours from `app.css` (`--bg`, `--main`), icons 192, 512, maskable 512 |
-| `public/icons/*` | PNG icons drawn by `scripts/make-icons.mjs` from `logo-mark.svg` (pure node, deterministic, committed). The maskable one keeps the mark inside the 80% safe circle. `apple-touch-icon.png` is 180 px |
+| `public/icons/*`, `public/favicon.ico` | Icons made by `scripts/make-icons.mjs` from the real logo `Brand/SDS-EZY.png` (resampled only, never redrawn): plain 192/512 and 128/256 (transparent corners), 16/32 favicons, an opaque 180 px apple-touch-icon, and an opaque full-bleed 512 maskable icon on the logo's own charcoal (#282828) with all lettering inside the centre safe circle. Committed; deterministic |
 | `public/sw.js` | The service worker |
 | `public/app-version.js` | `self.APP_VERSION` (content hash) and `self.APP_SHELL` (the files to precache). Written by `scripts/bump-version.mjs`. Never edit by hand |
 | `public/lib/offline.js` | `window.App.offline`: save, list, remove and clear saved places. Logic is in `createOffline({caches, localStorage, fetch})` so node tests can use fakes |

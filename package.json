@@ -26,6 +26,7 @@
     "jpeg-js": "^0.4.4",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299",
+    "pngjs": "^7.0.0",
     "qrcode-generator": "^2.0.4",
     "read-excel-file": "^9.3.12",
     "wrangler": "^4.0.0",

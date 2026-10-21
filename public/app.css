@@ -68,16 +68,17 @@ label.inline { display: flex; align-items: center; gap: 8px; margin: 6px 0; font
 .demo-row { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); text-align: center; font-size: 13px; color: var(--muted); }
 .demo-row p { margin: 0 0 10px; }
 .demo-row button { margin: 3px; }
-.login-card .brand-logo { height: 48px; max-width: 100%; }
-.login-card .brand-fallback { margin-bottom: 18px; }
+.login-brand { text-align: center; margin-bottom: 14px; }
+.login-logo { display: block; margin: 0 auto; width: 112px; height: 112px; border-radius: 22px; }
+.login-company { margin-top: 10px; }
+.login-card .brand-logo { height: 40px; max-width: 100%; }
 .powered-by { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 18px; font-size: 12px; color: var(--muted); }
-.powered-by .w-mark { font-size: 14px; color: var(--muted); }
+.powered-by img { width: 16px; height: 16px; border-radius: 3px; }
 
 /* ---------- brand ---------- */
 .brand-logo { height: 36px; width: auto; max-width: 240px; object-fit: contain; display: block; }
-.brand-fallback { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; color: var(--ink); }
-.w-mark { display: inline-block; width: 1.146em; height: 1em; font-size: 34px; background: currentColor; -webkit-mask: url(logo-mark.svg) no-repeat center / contain; mask: url(logo-mark.svg) no-repeat center / contain; flex-shrink: 0; }
-.brand-fallback .w-mark { color: var(--office); }
+.brand-line { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; color: var(--ink); }
+.brand-sds { width: 36px; height: 36px; flex-shrink: 0; border-radius: 8px; display: block; }
 
 /* ---------- shell ---------- */
 #app { display: none; min-height: 100vh; flex-direction: column; }
@@ -285,6 +286,7 @@ legend { font-size: 13px; font-weight: 600; color: var(--ink-soft); padding: 0 6
   #printArea .print-sub { color: #555; font-size: 11px; margin-bottom: 10px; }
   .print-brand { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 2px solid #333; padding-bottom: 8px; margin-bottom: 12px; }
   .print-brand .brand-logo { height: 40px; max-width: 220px; }
+  .print-brand .brand-sds { width: 40px; height: 40px; }
   .print-company { text-align: right; font-size: 11px; color: #444; line-height: 1.4; }
   .print-company strong { font-size: 13px; color: #000; }
   #printArea table.data { font-size: 11px; border: none; }
@@ -316,7 +318,10 @@ legend { font-size: 13px; font-weight: 600; color: var(--ink-soft); padding: 0 6
   .app-header { padding: 8px 14px; }
   .app-header .menu-btn { display: inline-block; }
   .brand-logo { height: 30px; }
-  .brand-fallback { font-size: 15px; }
+  .brand-line { font-size: 15px; }
+  .brand-sds { width: 32px; height: 32px; }
+  .login-card { padding: 22px 20px; }
+  .login-logo { width: 96px; height: 96px; }
   .app-body { display: block; }
   nav.sidebar { display: none; padding: 8px 10px 12px; }
   nav.sidebar.open { display: flex; }
@@ -346,8 +351,8 @@ legend { font-size: 13px; font-weight: 600; color: var(--ink-soft); padding: 0 6
 /* ======================================================================== phone first: shell, places */
 .app-header { justify-content: space-between; position: sticky; top: 0; z-index: 30; padding-top: max(8px, env(safe-area-inset-top)); }
 .app-header .brand-link { text-decoration: none; min-width: 0; overflow: hidden; }
-.app-header .brand-fallback { font-size: 16px; min-width: 0; }
-.app-header .brand-fallback span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-header .brand-line { font-size: 16px; min-width: 0; }
+.app-header .brand-line span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .place-chip { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 1; min-width: 0; max-width: 55%; min-height: 40px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 22px; background: var(--office-bg); color: var(--ink); text-decoration: none; font-size: 14px; white-space: nowrap; }
 .place-chip strong { overflow: hidden; text-overflow: ellipsis; }
 .place-chip .chip-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-soft); }
@@ -430,3 +435,8 @@ button.big, a.btn.big { min-height: 52px; font-size: 16px; padding: 12px 18px; w
 .fcard .note { margin: 8px 0 0; padding: 8px 10px; background: #FAF9F5; border-left: 3px solid var(--border); font-size: 14px; }
 .seg { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
 .seg button[aria-pressed=true] { background: var(--main); color: var(--on-main); border-color: var(--main); }
+@media (max-width: 860px) {
+  .app-header .brand-logo { max-width: 96px; height: 32px; }
+  .app-header .brand-link { flex: 1 1 auto; }
+  .place-chip { flex: 0 1 auto; max-width: 48%; }
+}

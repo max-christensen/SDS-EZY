@@ -215,8 +215,17 @@
   App.companyName = () => App.publicSettings.company_name || 'SDS EZY';
   App.brandMarkHtml = function () {
     const ps = App.publicSettings;
-    if (ps.has_logo) return `<span class="brand-fallback"><img class="brand-logo" src="/api/logo?v=${encodeURIComponent(ps.logo_version || '')}" alt=""><span>${App.esc(App.companyName())}</span></span>`;
-    return `<span class="brand-fallback"><span class="w-mark" aria-hidden="true"></span><span>${App.esc(App.companyName())}</span></span>`;
+    if (ps.has_logo) return `<span class="brand-line"><img class="brand-logo" src="/api/logo?v=${encodeURIComponent(ps.logo_version || '')}" alt=""><span>${App.esc(App.companyName())}</span></span>`;
+    return `<span class="brand-line"><img class="brand-sds" src="/icons/logo-128.png" width="36" height="36" alt="SDS EZY logo"><span>${App.esc(App.companyName())}</span></span>`;
+  };
+  // Login and setup screens: the SDS EZY logo, then the company line (name, and the company logo if one is uploaded) underneath.
+  App.loginBrandHtml = function () {
+    const ps = App.publicSettings;
+    const logo = '<img class="login-logo" src="/icons/logo-256.png" width="112" height="112" alt="SDS EZY">';
+    let line = '';
+    if (ps.has_logo) line = App.brandMarkHtml();
+    else if (ps.company_name) line = `<span class="brand-line"><span>${App.esc(ps.company_name)}</span></span>`;
+    return `<div class="login-brand">${logo}${line ? `<div class="login-company">${line}</div>` : ''}</div>`;
   };
   App.printHeaderHtml = function () {
     const c = App.settings || {};
@@ -317,7 +326,7 @@
     applyTheme(App.publicSettings.main_color, App.publicSettings.accent_color);
     document.title = App.companyName();
     $('appHeader').innerHTML = `<a class="brand-link" href="#/places" aria-label="${App.esc(App.companyName())}">${App.brandMarkHtml()}</a><a class="place-chip" id="placeChip" href="#/places"></a>`;
-    $('loginBrand').innerHTML = App.brandMarkHtml();
+    $('loginBrand').innerHTML = App.loginBrandHtml();
     renderChip();
     syncBarHeights();
   };

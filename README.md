@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/favicon.svg" alt="SDS EZY" width="96">
+  <img src="public/icons/logo-256.png" alt="SDS EZY" width="128" height="128">
 </p>
 
 # SDS EZY
@@ -211,7 +211,7 @@ The app is then at http://localhost:8787. Local data, including uploaded PDFs, i
 
 **Workers AI is not simulated locally.** The committed [wrangler.toml](wrangler.toml) includes the `[ai]` binding, and `wrangler dev` would send AI calls to Cloudflare's real service (and may be charged). So `npm run dev` does not use that block: it uses your own `wrangler.local.toml` if you have one, otherwise it writes `wrangler.generated.toml` (git-ignored) from `wrangler.toml` without `[ai]`. Your `wrangler.toml` is never modified. Uploads then use the no-AI draft path, or you can set a provider key in `.dev.vars`, or point `OPENAI_BASE_URL` at a local stand-in. The `.dev.vars` file is git-ignored; never commit it.
 
-The app installs a service worker (for the home-screen app and offline reading) that caches the app files. After editing files in `public/` while developing, unregister it in your browser's developer tools (Application, Service Workers) or the page may show old code. `npm run deploy` bumps the cached version automatically (`npm run predeploy`), so a new deploy replaces the old files on every phone.
+The app installs a service worker (for the home-screen app and offline reading) that caches the app files. After editing files in `public/` while developing, unregister it in your browser's developer tools (Application, Service Workers) or the page may show old code. Also note that `wrangler dev` lists the static files when it starts, so after **adding** a new file under `public/` (an image, a script) restart the dev server, or the new file will 404. `npm run deploy` bumps the cached version automatically (`npm run predeploy`), so a new deploy replaces the old files on every phone.
 
 Run the tests with `npm test` (Node 22.13 or newer, because some use Node's built-in SQLite). Some of them talk to a running local server and skip themselves, with a message, if there isn't one (each file says how to start it).
 
