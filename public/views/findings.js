@@ -12,6 +12,7 @@
     const p = esc(f.product_name), pl = esc(f.place_name);
     if (f.kind === 'not_found') return `Remove ${p} from ${pl}`;
     if (f.kind === 'found_link') return `Link ${p} to ${pl}`;
+    if (f.kind === 'found_unchecked') return `Nothing on the register changes. It only marks that you have looked at ${p}`;
     if (f.kind === 'changed') {
       const oq = pick(d, ['expected_quantity', 'old_quantity', 'quantity']), ou = pick(d, ['expected_unit', 'old_unit', 'unit']);
       const nq = pick(d, ['new_quantity']), nu = pick(d, ['new_unit']) || ou;
@@ -23,7 +24,7 @@
     }
     return `${esc(f.kind)}: ${p} at ${pl}`;
   }
-  const kindLabel = { not_found: 'Not found', changed: 'Changed', found_link: 'Found, not linked' };
+  const kindLabel = { not_found: 'Not found', changed: 'Changed', found_link: 'Found, not linked', found_unchecked: 'Found without checking the register' };
 
   App.views.register('findings', {
     title: 'Findings',
@@ -49,10 +50,11 @@
               <div class="audit-line" style="margin:0"><span class="badge ${f.status === 'open' ? 'due_soon' : f.status === 'accepted' ? 'ok' : 'none'}">${esc(kindLabel[f.kind] || f.kind)}${f.status !== 'open' ? ' &middot; ' + esc(f.status) : ''}</span><span class="meta">${esc(App.fmtDate(f.created_at))}</span></div>
               <div class="what">${esc(f.product_name)}</div>
               <div class="meta">${esc(f.place_name)} &middot; <a href="#/audit/${f.audit_id}/report">See audit ${f.audit_id}</a></div>
-              ${f.status === 'open' ? `<p style="margin:8px 0 0"><strong>Accept will:</strong> ${acceptLine(f, d)}.</p>` : `<p class="meta" style="margin:8px 0 0">${esc(f.status === 'accepted' ? 'Accepted' : 'Dismissed')} by ${esc(f.resolved_by_name || 'an admin')}${f.resolved_at ? ' on ' + esc(App.fmtDate(f.resolved_at)) : ''}${f.resolve_note ? '. ' + esc(f.resolve_note) : ''}</p>`}
+              ${f.kind === 'found_unchecked' ? `<div class="meta">${(f.supplier || d.supplier) ? 'Supplier: ' + esc(f.supplier || d.supplier) + ' &middot; ' : ''}Found ${esc(App.fmtDate(d.found_at || f.created_at))}${d.found_at && /T\d\d:\d\d/.test(d.found_at) ? ' at ' + esc(new Date(d.found_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) : ''}. It was recorded while the phone had no signal, without checking the register.</div>` : ''}
+              ${f.status === 'open' ? `<p style="margin:8px 0 0"><strong>${f.kind === 'found_unchecked' ? 'Note:' : 'Accept will:'}</strong> ${acceptLine(f, d)}.</p>` : `<p class="meta" style="margin:8px 0 0">${esc(f.status === 'accepted' ? 'Accepted' : 'Dismissed')} by ${esc(f.resolved_by_name || 'an admin')}${f.resolved_at ? ' on ' + esc(App.fmtDate(f.resolved_at)) : ''}${f.resolve_note ? '. ' + esc(f.resolve_note) : ''}</p>`}
               ${note ? `<div class="note">${esc(note)}</div>` : ''}
               ${App.photoThumbs(photos)}
-              ${f.status === 'open' ? `<div class="btn-pair"><button type="button" class="primary" data-accept="${f.id}">Accept</button><button type="button" data-dismiss="${f.id}">Dismiss</button></div>` : ''}</article>`;
+              ${f.status === 'open' ? `<div class="btn-pair"><button type="button" class="primary" data-accept="${f.id}">${f.kind === 'found_unchecked' ? 'I\'ve looked at this' : 'Accept'}</button><button type="button" data-dismiss="${f.id}">Dismiss</button></div>` : ''}</article>`;
           }).join('');
         } catch (err) { App.showError(list, err, load); }
       }

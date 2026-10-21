@@ -163,7 +163,7 @@ export async function handleGetAudit(c) {
     env.DB.prepare("SELECT id, client_id, owner_type, owner_key, taken_at, bytes, width, height FROM audit_photos WHERE audit_id = ? ORDER BY id").bind(id),
   ]);
   return json({
-    audit: auditOut(a), items: sortItems(res[0].results), found: res[1].results, disposals: res[2].results,
+    audit: auditOut(a), items: sortItems(res[0].results), found: res[1].results.map(foundOut), disposals: res[2].results,
     findings: res[3].results.map(f => ({ ...f, details: parseJson(f.details, null) })), photos: res[4].results,
   });
 }
@@ -216,9 +216,10 @@ export async function handleFinishAudit(c) {
   const notes = cleanStr(b.notes, 2000, "Notes");
   const res = await env.DB.batch([
     env.DB.prepare(`SELECT ${ITEM_COLS} FROM audit_items WHERE audit_id = ?`).bind(id),
-    env.DB.prepare("SELECT id, product_name, supplier, matched_chemical_id, chemical_id, outcome, note FROM audit_found WHERE audit_id = ?").bind(id),
+    env.DB.prepare("SELECT id, client_id, product_name, supplier, matched_chemical_id, chemical_id, outcome, note, found_at FROM audit_found WHERE audit_id = ?").bind(id),
     env.DB.prepare("SELECT COUNT(*) AS n FROM audit_disposals WHERE audit_id = ?").bind(id),
     env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM audit_photos WHERE audit_id = ?").bind(id),
+    env.DB.prepare("SELECT id, owner_key FROM audit_photos WHERE audit_id = ? AND owner_type = 'found' ORDER BY id").bind(id),
   ]);
   const items = res[0].results, found = res[1].results;
   const count = (r) => items.filter(i => i.result === r).length;
@@ -241,6 +242,13 @@ export async function handleFinishAudit(c) {
     }));
   }
   for (const f of found) {
+    if (f.outcome === "recorded_unchecked") {
+      stmts.push(ins("found_unchecked", null, f.product_name, null, null, f.id, {
+        name: f.product_name, supplier: f.supplier, note: f.note, found_at: f.found_at,
+        photo_ids: res[4].results.filter(p => p.owner_key === f.client_id).map(p => p.id),
+      }));
+      continue;
+    }
     if (f.outcome !== "link_suggested") continue;
     stmts.push(ins("found_link", f.chemical_id ?? f.matched_chemical_id, f.product_name, null, null, f.id, { supplier: f.supplier, note: f.note }));
   }
@@ -301,7 +309,12 @@ export async function handleFoundMatch(c) {
   return json({ candidates });
 }
 
-function foundResponse(f, placeId) {
+// An unchecked item (sent while the phone was offline) is stored with outcome "recorded_unchecked" (no schema change) and shown as
+// outcome "recorded" with unchecked: true. At finish it becomes a "found_unchecked" finding for the admin.
+export function foundOut(f) { return f && f.outcome === "recorded_unchecked" ? { ...f, outcome: "recorded", unchecked: true } : f; }
+
+function foundResponse(raw, placeId) {
+  const f = foundOut(raw);
   const out = { found: f, chemical_id: f.chemical_id ?? null };
   if (f.outcome === "created") out.next = { upload_for_chemical: f.chemical_id, place_id: placeId };
   return out;
@@ -315,7 +328,11 @@ export async function handleAddFound(c) {
   const clientId = cleanClientId(b.client_id);
   const dup = await env.DB.prepare(`SELECT ${FOUND_COLS} FROM audit_found WHERE audit_id = ? AND client_id = ?`).bind(id, clientId).first();
   if (dup) return json(foundResponse(dup, a.place_id));
-  if (a.status !== "in_progress") throw new ApiError(409, FINISHED_MSG);
+  const unchecked = b.unchecked === true;
+  if (b.unchecked !== undefined && b.unchecked !== true && b.unchecked !== false) throw bad("unchecked must be true or false");
+  if (unchecked && (b.action || "record") !== "record") throw bad("unchecked is only for action record");
+  // A finished audit takes no new answers, except an unchecked item that was queued on the phone (it still needs the admin's look).
+  if (a.status !== "in_progress" && !unchecked) throw new ApiError(409, FINISHED_MSG);
   const name = cleanStr(b.product_name, 200, "Product name", { required: true });
   const supplier = cleanStr(b.supplier, 200, "Supplier");
   const source = cleanEnum(b.source || "typed", ["ai", "typed"], "Source");
@@ -338,7 +355,17 @@ export async function handleAddFound(c) {
     return env.DB.prepare(`SELECT ${FOUND_COLS} FROM audit_found WHERE audit_id = ? AND client_id = ?`).bind(id, clientId).first();
   };
   if (action === "record") {
-    return json(foundResponse(await finish([insertFound(null, "NULL", "recorded")]), a.place_id), 201);
+    if (!unchecked) return json(foundResponse(await finish([insertFound(null, "NULL", "recorded")]), a.place_id), 201);
+    const stmts = [insertFound(null, "NULL", "recorded_unchecked")];
+    if (a.status !== "in_progress") {
+      // The audit is already finished: the finding is made now, in the same batch (a replay hits the client_id duplicate above).
+      stmts.push(env.DB.prepare(
+        `INSERT INTO audit_findings (audit_id, kind, place_id, place_name, product_name, found_id, details)
+         SELECT ?, 'found_unchecked', ?, ?, ?, (SELECT id FROM audit_found WHERE audit_id = ? AND client_id = ?), ?
+         WHERE EXISTS (SELECT 1 FROM audit_found WHERE audit_id = ? AND client_id = ?)`
+      ).bind(id, a.place_id, a.place_name, name, id, clientId, JSON.stringify({ name, supplier, note, found_at: foundAt, photo_ids: [] }), id, clientId));
+    }
+    return json(foundResponse(await finish(stmts), a.place_id), 201);
   }
   if (action === "link") {
     const cid = cleanId(b.matched_chemical_id, "Matched chemical");
@@ -454,7 +481,7 @@ export async function handleListFindings(c) {
   const { results } = await (status === "all" ? stmt.bind(limit) : stmt.bind(status, limit)).all();
   const photos = await photosForAudits(env, [...new Set(results.map(f => f.audit_id))], ["item", "found"]);
   return json(results.map(f => {
-    const mine = photos.filter(p => p.audit_id === f.audit_id && (f.kind === "found_link"
+    const mine = photos.filter(p => p.audit_id === f.audit_id && (f.kind === "found_link" || f.kind === "found_unchecked"
       ? p.owner_type === "found" && p.found_id === f.found_id
       : p.owner_type === "item" && p.owner_key === String(f.chemical_id)));
     return { ...f, details: parseJson(f.details, null), photos: mine.map(photoRef), photo_ids: mine.map(p => p.id) };
@@ -503,6 +530,10 @@ export async function handleAcceptFinding(c) {
     await env.DB.batch([...linkChemicalToPlaceStatements(env, { chemicalId: f.chemical_id, placeId: f.place_id }), resolveStmt(env, user, id, "accepted", null)]);
     return reply("applied", "Linked to this place.");
   }
+  if (f.kind === "found_unchecked") {
+    await resolveStmt(env, user, id, "accepted", null).run();
+    return reply("noted", "Noted. Nothing on the register was changed. Add or link the chemical from the register if needed.");
+  }
   throw bad("Unknown finding type");
 }
 
@@ -546,7 +577,7 @@ export async function handleUploadPhoto(c) {
   if (!ownerType) throw bad("owner_type is required");
   if (ownerType === "disposal_close") {
     if (!isAdmin(user)) throw new ApiError(403, "Only an administrator can add a closing photo.");
-  } else if (a.status !== "in_progress") throw new ApiError(409, FINISHED_MSG);
+  }
   let ownerKey = form.get("owner_key");
   ownerKey = ownerKey === null || ownerKey === "" ? null : String(ownerKey).slice(0, 100);
   if (ownerType === "audit") ownerKey = null;
@@ -554,9 +585,10 @@ export async function handleUploadPhoto(c) {
   // The owner must exist in this audit.
   let owner = true;
   if (ownerType === "item") owner = /^\d+$/.test(ownerKey) && await env.DB.prepare("SELECT id FROM audit_items WHERE audit_id = ? AND chemical_id = ?").bind(id, Number(ownerKey)).first();
-  else if (ownerType === "found") owner = await env.DB.prepare("SELECT id FROM audit_found WHERE audit_id = ? AND client_id = ?").bind(id, ownerKey).first();
+  else if (ownerType === "found") owner = await env.DB.prepare("SELECT id, outcome FROM audit_found WHERE audit_id = ? AND client_id = ?").bind(id, ownerKey).first();
   else if (ownerType === "disposal" || ownerType === "disposal_close") owner = await env.DB.prepare("SELECT id FROM audit_disposals WHERE audit_id = ? AND client_id = ?").bind(id, ownerKey).first();
   if (!owner) throw bad("That photo belongs to something that is not in this audit");
+  if (ownerType !== "disposal_close" && a.status !== "in_progress" && !(ownerType === "found" && owner.outcome === "recorded_unchecked")) throw new ApiError(409, FINISHED_MSG);
   const file = form.get("file");
   if (!file || typeof file === "string") throw bad("No photo received");
   if (file.size > maxBytes) throw new ApiError(413, `That photo is too large (max ${cfg.audit_photo_max_mb} MB)`);
@@ -623,7 +655,7 @@ export async function auditExportData(env, user) {
   ]);
   return {
     audits: audits.results.map(a => ({ ...a, summary: parseJson(a.summary, null) })),
-    audit_items: items.results, audit_found: found.results, audit_disposals: disposals.results,
+    audit_items: items.results, audit_found: found.results.map(foundOut), audit_disposals: disposals.results,
     audit_findings: findings.results.map(f => ({ ...f, details: parseJson(f.details, null) })), audit_photos: photos.results,
   };
 }

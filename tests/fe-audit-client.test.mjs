@@ -115,7 +115,7 @@ test("list builds the query, get/match/photoUrl use the right paths", async () =
 
 test("pending() is zero while online only, and onChange reports sending / sent / failed", async () => {
   const { client } = mk([res(200, { ok: true }), res(400, { error: "no" })]);
-  assert.deepEqual(client.pending(), { answers: 0, photos: 0, other: 0 });
+  assert.deepEqual(client.pending(), { answers: 0, photos: 0, other: 0, failed: 0, total: 0, bytes: 0 });
   const seen = [];
   const off = client.onChange((e) => seen.push(e.type + ":" + e.op.kind));
   await client.markItem(1, 1, { result: "present" });
@@ -123,4 +123,18 @@ test("pending() is zero while online only, and onChange reports sending / sent /
   off();
   await client.markItem(1, 1, { result: "present" }).catch(() => {});
   assert.deepEqual(seen, ["sending:answer", "sent:answer", "sending:answer", "failed:answer"]);
+});
+
+test("addFound passes unchecked only when set; online stubs of the outbox contract", async () => {
+  const { client, calls } = mk([res(200, { found: { id: 1 } })]);
+  await client.addFound(5, { productName: "X", action: "record", unchecked: true });
+  assert.equal(body(calls[0]).unchecked, true);
+  await client.addFound(5, { productName: "Y", action: "record" });
+  assert.equal("unchecked" in body(calls[1]), false);
+  assert.equal(client.isLocalId("local-abc"), true);
+  assert.equal(client.isLocalId(4), false);
+  assert.equal(client.serverId(4), 4);
+  assert.equal(client.serverId("local-abc"), null);
+  assert.deepEqual(client.queue(), []);
+  await client.sendNow(); await client.discardAll();
 });

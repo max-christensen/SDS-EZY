@@ -12,7 +12,12 @@
 
   // ---- busy flag shared with the app (a service worker update must wait while a photo is going up or a finish is running)
   let busyN = 0;
-  function busy(delta) { busyN = Math.max(0, busyN + delta); App.busy = busyN > 0; }
+  function syncBusy() {
+    let sending = false;
+    try { const L = window.SDSLib; sending = L.auditModel.isSending(L.auditClient.queue()); } catch (e) { sending = false; }
+    App.busy = busyN > 0 || sending;
+  }
+  function busy(delta) { busyN = Math.max(0, busyN + delta); syncBusy(); }
 
   App.views.register('audit', {
     title: 'Audit',
@@ -20,7 +25,10 @@
       await libs();
       const M = window.SDSLib.auditModel, client = window.SDSLib.auditClient, P = window.SDSLib.photo;
       M.ensureCss();
-      const id = params.id;
+      let id = params.id;                        // may be a local id (local-<uuid>) until the start op has been sent
+      const qNow = () => { try { return client.queue() || []; } catch (e) { return []; } };
+      const pendNow = () => { try { return client.pending() || {}; } catch (e) { return {}; } };
+      const idList = () => [params.id, id];
       root.innerHTML = App.loadingHtml('Loading audit...');
       let d;
       try { d = await client.get(id); }
@@ -40,6 +48,8 @@
       const inflight = new Set();
       let gone = false;
       App.onLeave(() => { gone = true; });
+      const offChange = client.onChange((ev) => onClientEvent(ev));
+      App.onLeave(() => { offChange(); syncBusy(); });
       const track = (p) => { inflight.add(p); p.then(() => inflight.delete(p), () => inflight.delete(p)); return p; };
       const uuid = () => window.SDSLib.auditClientFactory.defaultUuid();
 
@@ -65,8 +75,12 @@
         return { answers, photos, other: 0 };
       }
       function drawUnsent() {
-        const c = unsentCounts(), t = M.pendingText(c);
-        q('#auUnsent').innerHTML = t ? `<div class="au-unsent" role="alert">${esc(t)} <button type="button" class="small" data-act="sendall">Try again now</button></div>` : '';
+        const c = unsentCounts(), p = pendNow();
+        const sum = { answers: c.answers + (p.answers || 0), photos: c.photos + (p.photos || 0), other: (p.other || 0), failed: p.failed || 0 };
+        const t = M.headerText(sum), anyQueued = M.pendingTotal(p) > 0 || qNow().length > 0;
+        const online = App.isOnline();
+        const off = !online && !readOnly ? '<div class="au-unsent" role="status" style="background:var(--office-bg);color:var(--ink);border-color:var(--office)">Offline: answers are saved on this phone and sent when you have signal.</div>' : '';
+        q('#auUnsent').innerHTML = off + (t ? `<div class="au-unsent" role="alert">${esc(t)} ${online && anyQueued ? '<button type="button" class="link" data-act="sendnow">Send now</button>' : ''}${c.answers || c.photos ? ' <button type="button" class="small" data-act="sendall">Try again now</button>' : ''}</div>` : '');
       }
 
       // ------------------------------------------------------------------ found items and disposals already on this audit
@@ -74,8 +88,8 @@
         const f = d.found, x = d.disposals;
         if (!f.length && !x.length) { q('#auExtras').innerHTML = ''; return; }
         q('#auExtras').innerHTML = `<details class="card" style="padding:12px 14px"><summary style="font-weight:700;min-height:28px;cursor:pointer">${[f.length ? 'Found items (' + f.length + ')' : '', x.length ? 'Flagged for disposal (' + x.length + ')' : ''].filter(Boolean).join(' · ')}</summary>
-          ${f.length ? `<h2>Found items (${f.length})</h2><ul class="au-list">${f.map((r) => `<li><strong>${esc(r.product_name)}</strong>${r.supplier ? ' &middot; ' + esc(r.supplier) : ''}<br><span class="muted">${esc(M.foundOutcomeText(r.outcome, App.isAdmin()))}</span></li>`).join('')}</ul>` : ''}
-          ${x.length ? `<h2${f.length ? ' style="margin-top:14px"' : ''}>Flagged for disposal (${x.length})</h2><ul class="au-list">${x.map((r) => `<li><strong>${esc(r.description)}</strong><br><span class="muted">${esc(M.REASON_LABEL[r.reason] || r.reason)}${r.status === 'disposed' ? ' &middot; disposed' : ''}</span></li>`).join('')}</ul>` : ''}</details>`;
+          ${f.length ? `<h2>Found items (${f.length})</h2><ul class="au-list">${f.map((r) => `<li><strong>${esc(r.product_name)}</strong>${r.supplier ? ' &middot; ' + esc(r.supplier) : ''}<br><span class="muted">${esc(M.foundOutcomeText(r.outcome, App.isAdmin()))}${r.unsent ? ' &middot; not sent yet' : ''}${r.unchecked ? ' &middot; unchecked' : ''}</span></li>`).join('')}</ul>` : ''}
+          ${x.length ? `<h2${f.length ? ' style="margin-top:14px"' : ''}>Flagged for disposal (${x.length})</h2><ul class="au-list">${x.map((r) => `<li><strong>${esc(r.description)}</strong><br><span class="muted">${esc(M.REASON_LABEL[r.reason] || r.reason)}${r.status === 'disposed' ? ' &middot; disposed' : ''}${r.unsent ? ' &middot; not sent yet' : ''}</span></li>`).join('')}</ul>` : ''}</details>`;
       }
 
       // ------------------------------------------------------------------ one card
@@ -83,7 +97,9 @@
       const uploadsFor = (cid) => uploads.filter((u) => u.ownerType === 'item' && String(u.ownerKey) === String(cid));
       function photoHtml(cid, name) {
         const sent = photosFor(cid), pend = uploadsFor(cid);
-        const thumbs = sent.map((p) => `<button type="button" class="au-ph" data-view="${esc(localThumb[p.id] || client.photoUrl(p.id))}" aria-label="View photo of ${esc(name)}"><img src="${esc(localThumb[p.id] || client.photoUrl(p.id))}" alt="Photo of ${esc(name)}" loading="lazy"></button>`).join('')
+        const srcOf = (p) => localThumb[p.id] || p.local_url || p.url || client.photoUrl(p.id);
+        const qn = qNow();
+        const thumbs = sent.map((p) => `<button type="button" class="au-ph" data-view="${esc(srcOf(p))}" aria-label="View photo of ${esc(name)}"><img src="${esc(srcOf(p))}" alt="Photo of ${esc(name)}" loading="lazy">${M.isUnsentPhoto(qn, p) ? '<span class="au-phs">Not sent yet</span>' : ''}</button>`).join('')
           + pend.map((u) => `<div class="au-ph${u.status === 'failed' ? ' err' : ''}">${u.url ? `<img src="${esc(u.url)}" alt="Photo being sent">` : ''}<span class="au-phs">${u.status === 'failed' ? 'Not sent' : u.status === 'sending' ? 'Sending...' : 'Preparing...'}</span>${u.status === 'failed' ? `<button type="button" class="small" style="position:absolute;inset:0;opacity:0" data-act="retryphoto" data-key="${esc(u.key)}" aria-label="Try sending this photo again">Retry</button>` : ''}</div>`).join('');
         const count = sent.length + pend.length;
         const can = !readOnly && count < M.MAX_PHOTOS_PER_OWNER;
@@ -94,6 +110,10 @@
       }
       function stateHtml(cid) {
         const u = U(cid);
+        const qs = M.cardState(qNow(), idList(), cid);
+        if (qs.state && u.state !== 'saving' && u.state !== 'edited' && u.state !== 'error') {
+          return esc(M.cardStateText(qs)) + (qs.state === 'failed' ? ' <button type="button" class="small" data-act="sendnow">Try again</button>' : '');
+        }
         if (u.state === 'saving') return 'Saving...';
         if (u.state === 'saved') return '&#10003; Saved';
         if (u.state === 'edited') return 'Press Save change to send this.';
@@ -139,7 +159,7 @@
       }
       function paintState(cid) {
         const u = U(cid), el = q(`#c${CSS.escape(String(cid))} .au-state`);
-        if (el) { el.className = 'au-state' + (u.state === 'error' ? ' err' : ''); el.innerHTML = stateHtml(cid); }
+        if (el) { el.className = 'au-state' + (u.state === 'error' || M.cardState(qNow(), idList(), cid).state === 'failed' ? ' err' : ''); el.innerHTML = stateHtml(cid); }
         drawUnsent();
       }
 
@@ -175,7 +195,7 @@
           const res = await client.addPhoto(id, { blob: rec.blob, ownerType: rec.ownerType, ownerKey: rec.ownerKey, takenAt: rec.takenAt, width: rec.width, height: rec.height, clientId: rec.clientId });
           const row = res.photo || res;
           const pid = row.id != null ? row.id : res.id;
-          d.photos.push({ id: pid, owner_type: rec.ownerType, owner_key: String(rec.ownerKey == null ? '' : rec.ownerKey), taken_at: rec.takenAt, bytes: rec.blob.size, width: rec.width, height: rec.height });
+          d.photos.push({ id: pid, client_id: res.client_id, owner_type: rec.ownerType, owner_key: String(rec.ownerKey == null ? '' : rec.ownerKey), taken_at: rec.takenAt, bytes: rec.blob.size, width: rec.width, height: rec.height });
           if (pid != null && rec.url) localThumb[pid] = rec.url;
           uploads.splice(uploads.indexOf(rec), 1);
         } catch (e) { rec.status = 'failed'; rec.error = e.message; }
@@ -234,6 +254,7 @@
         }
         if (!act) return;
         const a = act.dataset.act;
+        if (a === 'sendnow') { try { await client.sendNow(); } catch (err) { App.toast(err.message, 'error'); } drawUnsent(); items.forEach((it) => paintState(it.chemical_id)); return; }
         if (a === 'sendall') { await retryAll(); return; }
         if (a === 'retryphoto') {
           const rec = uploads.find((x) => x.key === act.dataset.key); if (!rec) return;
@@ -259,6 +280,25 @@
         if (a === 'dispose') openDisposal(it);
       });
 
+      // Events from the client (the offline wrapper emits sending | sent | failed | synced). Repaint what depends on them.
+      let repaintTimer = null;
+      function onClientEvent(ev) {
+        syncBusy();
+        if (gone) return;
+        clearTimeout(repaintTimer);
+        repaintTimer = setTimeout(() => {
+          if (gone) return;
+          swapToServerId();
+          items.forEach((it) => paintState(it.chemical_id));
+          drawUnsent();
+        }, 120);
+      }
+      // After the start op is sent the audit has a server id: put it in the address without re-rendering (the screen keeps its state).
+      function swapToServerId() {
+        if (!M.isLocalId(id)) return;
+        let sid = null; try { sid = client.serverId(id); } catch (e) { sid = null; }
+        if (sid != null && !M.isLocalId(sid)) { id = String(sid); try { history.replaceState(null, '', '#/audit/' + encodeURIComponent(id)); } catch (e) { /* ignore */ } }
+      }
       async function retryAll() {
         const jobs = [];
         ui.forEach((u, cid) => { if (u.state === 'error') jobs.push(save(cid)); });

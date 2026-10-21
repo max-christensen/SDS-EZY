@@ -77,3 +77,53 @@ export function world() {
   };
   return { place, routes };
 }
+
+// ---- A small in-memory IndexedDB: just the parts public/lib/audit-store.js uses. Not a general fake.
+export class FakeIndexedDB {
+  constructor() { this.dbs = new Map(); }
+  open(name) {
+    const req = {};
+    setTimeout(() => {
+      let data = this.dbs.get(name);
+      const fresh = !data;
+      if (fresh) { data = { stores: new Map(), defs: new Map() }; this.dbs.set(name, data); }
+      const db = {
+        objectStoreNames: { contains: (n) => data.stores.has(n) },
+        createObjectStore: (n, def) => { data.stores.set(n, new Map()); data.defs.set(n, { ...def, next: 1 }); },
+        transaction: (names) => makeTx(data, names)
+      };
+      req.result = db;
+      if (fresh && req.onupgradeneeded) req.onupgradeneeded();
+      if (req.onsuccess) req.onsuccess();
+    }, 0);
+    return req;
+  }
+}
+function makeTx(data, names) {
+  const t = { pending: 0, done: false };
+  const finish = () => setTimeout(() => { if (t.pending > 0) return finish(); if (!t.done) { t.done = true; t.oncomplete && t.oncomplete(); } }, 0);
+  t.objectStore = (n) => {
+    const m = data.stores.get(n), def = data.defs.get(n);
+    const request = (fn) => {
+      const req = {}; t.pending++;
+      let res, err;
+      try { res = fn(); } catch (e) { err = e; }
+      queueMicrotask(() => { t.pending--; if (err) { req.error = err; req.onerror && req.onerror(); } else { req.result = res; req.onsuccess && req.onsuccess(); } });
+      return req;
+    };
+    return {
+      put: (v) => request(() => {
+        let key;
+        if (def.autoIncrement && v[def.keyPath] == null) { key = def.next++; v = { ...v, [def.keyPath]: key }; }
+        else { key = v[def.keyPath]; if (def.autoIncrement && typeof key === 'number' && key >= def.next) def.next = key + 1; }
+        m.set(key, structuredClone(v)); return key;
+      }),
+      get: (k) => request(() => (m.has(k) ? structuredClone(m.get(k)) : undefined)),
+      delete: (k) => request(() => { m.delete(k); }),
+      getAll: () => request(() => [...m.values()].map((x) => structuredClone(x))),
+      clear: () => request(() => { m.clear(); })
+    };
+  };
+  finish();
+  return t;
+}

@@ -320,6 +320,9 @@
     offline.applyUpdate = function () {
       var sw = root.navigator && root.navigator.serviceWorker;
       if (!sw) return Promise.resolve(false);
+      // Not while audit work is waiting to be sent: an update drops the saved-for-offline sign-in, and the person must be able to open the app.
+      var ob = root.SDSLib && root.SDSLib.auditClient;
+      try { if (ob && typeof ob.pending === 'function' && ob.pending().total > 0) return Promise.resolve(false); } catch (e) { /* ignore */ }
       return sw.getRegistration().then(function (r) {
         if (r && r.waiting) { r.waiting.postMessage({ type: 'skipWaiting' }); return true; }
         return false;
@@ -332,7 +335,12 @@
       var App = root.App = root.App || {};
       if (App.offline !== offline) App.offline = offline;
       if (!hooked && typeof App.addLogoutHook === 'function') {
-        App.addLogoutHook(function () { return offline.clearAll(); });
+        App.addLogoutHook(async function () {
+          // Unsent audit work comes first: the outbox's own hook asks the person; this check keeps the saved data safe if it said no.
+          var oc = root.SDSLib && root.SDSLib.auditOutbox;
+          if (oc && typeof oc.signOutGuard === 'function') { var ok = await oc.signOutGuard(); if (ok === false) return false; }
+          return offline.clearAll();
+        });
         hooked = true;
       }
       // Housekeeping once the app knows who is signed in: another person's saved data goes.

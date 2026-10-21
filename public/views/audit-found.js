@@ -35,7 +35,7 @@
 
       // everything this screen holds; reset by "Add another"
       let S;
-      const fresh = () => ({ foundId: uuid(), photo: null, aiName: '', aiSupplier: '', fromAi: false, readState: '', readMsg: '', name: '', supplier: '', note: '', cands: null, matchErr: '', matching: false, saving: false, result: null, readToken: 0 });
+      const fresh = () => ({ foundId: uuid(), photo: null, aiName: '', aiSupplier: '', fromAi: false, readState: '', readMsg: '', name: '', supplier: '', note: '', cands: null, matchErr: '', matching: false, saving: false, result: null, readToken: 0, offline: false });
       S = fresh();
 
       function draw() {
@@ -63,12 +63,19 @@
       }
       function readLineHtml() {
         if (S.readState === 'reading') return 'Reading the label...';
+        if (S.readState === 'offline') return `<div class="notice warn" role="status" style="margin:0">${esc(M.NO_SIGNAL_FOUND)} The photo is still kept.</div>`;
         if (S.readState === 'ok') return S.fromAi ? 'Label read. Check the name and supplier below.' : 'The label could not be read. Type the name and supplier below.';
         if (S.readState === 'fail') return `<div class="notice warn" role="alert" style="margin:0">${esc(S.readMsg)}</div>`;
         return '';
       }
       function matchHtml() {
-        if (S.cands === null && !S.matchErr) return '';
+        if (S.cands === null && !S.matchErr && !S.offline) return '';
+        if (S.offline) return `<section class="card" aria-labelledby="mh"><h2 id="mh">3. Record it</h2>
+          <div class="notice warn" role="status">${esc(M.NO_SIGNAL_FOUND)}</div>
+          <button type="button" class="primary au-big" id="recBtn">Record it for the admin to check</button>
+          <button type="button" class="au-big" id="newBtn" style="margin-top:10px" disabled aria-describedby="offWhy">This is a new product</button>
+          <p class="hint" id="offWhy">Needs a signal. Adding a new product and linking to the register are not available offline.</p>
+          <p class="error-text" id="saveErr" role="alert"></p></section>`;
         const cands = S.cands || [];
         return `<section class="card" aria-labelledby="mh"><h2 id="mh">3. Is it on the register?</h2>
           ${S.matchErr ? `<div class="notice warn" role="alert">${esc(S.matchErr)} You can still record it.</div>` : (cands.length ? '<p class="muted" style="margin:0 0 10px">These are on the register. Choose one if it is the same product.</p>' : '<p class="muted" style="margin:0 0 10px">Nothing on the register matches that name.</p>')}
@@ -84,7 +91,8 @@
       function resultHtml() {
         const r = S.result;
         return `<section class="card" aria-live="polite">
-          <h2>${esc(M.foundOutcomeText(r.outcome, isAdmin))}</h2>
+          <h2>${esc(r.unchecked ? 'Recorded on this phone' : M.foundOutcomeText(r.outcome, isAdmin))}</h2>
+          ${r.unchecked ? '<p class="muted" style="margin:0 0 6px">It is sent when you have signal, and the admin will check it.</p>' : ''}
           <p style="margin:0"><strong>${esc(r.name)}</strong>${r.supplier ? ' &middot; ' + esc(r.supplier) : ''}</p>
           ${r.photoState === 'failed' ? `<div class="notice warn" role="alert" style="margin-top:10px">The photo has not been sent. ${esc(r.photoErr)}<br><button type="button" class="small" id="retryPhoto">Send the photo again</button></div>` : ''}
           ${r.photoState === 'sending' ? '<p class="muted">Sending the photo...</p>' : ''}
@@ -113,6 +121,7 @@
             if (S.photo && S.photo.url) URL.revokeObjectURL(S.photo.url);
             S.photo = Object.assign({ url: URL.createObjectURL(c.blob) }, c);
             S.cands = null; S.matchErr = '';
+            if (!App.isOnline()) { S.offline = true; S.readState = 'offline'; draw(); return; }
             draw();
             await readLabel(token);
           } catch (e) { if (token !== S.readToken) return; S.readState = 'fail'; S.readMsg = e.message; draw(); }
@@ -120,7 +129,7 @@
         ['#fName', '#fSup', '#fNote'].forEach((sel) => { const el = g(sel); if (el) el.addEventListener('input', () => {
           readFields();
           const cb = g('#checkBtn'); if (cb) cb.disabled = !S.name.trim() || S.matching;
-          if (sel !== '#fNote' && S.cands !== null) { S.cands = null; S.matchErr = ''; const m = g('#matchArea'); if (m) m.innerHTML = ''; }
+          if (sel !== '#fNote' && S.cands !== null && !S.offline) { S.cands = null; S.matchErr = ''; const m = g('#matchArea'); if (m) m.innerHTML = ''; }
         }); });
         const cb = g('#checkBtn'); if (cb) cb.addEventListener('click', checkRegister);
         root.querySelectorAll('[data-link]').forEach((b) => b.addEventListener('click', () => submit('link', S.cands[+b.dataset.link])));
@@ -142,6 +151,7 @@
           } else { S.readState = 'fail'; S.readMsg = (r && r.message) || 'The label could not be read automatically.'; if (!/type/i.test(S.readMsg)) S.readMsg += ' Type the name and supplier below.'; S.readMsg += ' The photo is still kept.'; }
         } catch (e) {
           if (token !== S.readToken) return;
+          if (e.offline) { S.offline = true; S.readState = 'offline'; draw(); return; }
           S.readState = 'fail';
           S.readMsg = (e.offline ? 'No signal, so the label could not be read.' : e.message); if (!/type/i.test(S.readMsg)) S.readMsg += ' Type the name and supplier below.'; S.readMsg += ' The photo is still kept.';
         }
@@ -152,11 +162,12 @@
       async function checkRegister() {
         readFields();
         if (!S.name.trim()) return;
+        if (!App.isOnline() || S.offline) { S.offline = true; S.cands = []; draw(); return; }
         S.matching = true; S.matchErr = ''; draw();
         try {
           const r = await client.matchFound(id, { productName: S.name.trim(), supplier: S.supplier.trim() });
           S.cands = (r && r.candidates) || [];
-        } catch (e) { S.cands = []; S.matchErr = e.message; }
+        } catch (e) { S.cands = []; if (e.offline) { S.offline = true; S.matchErr = ''; } else S.matchErr = e.message; }
         S.matching = false; draw();
         const m = root.querySelector('#matchArea'); if (m && m.scrollIntoView) m.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }
@@ -177,15 +188,19 @@
         readFields();
         const err = root.querySelector('#saveErr');
         if (!S.name.trim()) return;
+        const offline = S.offline || !App.isOnline();
+        if (offline && action !== 'record') { if (err) err.textContent = 'Needs a signal. You can still record it for the admin to check.'; return; }
         S.saving = true; root.querySelectorAll('#matchArea button').forEach((b) => { b.disabled = true; });
         busy(1);
         try {
           // the found row first (own client_id, so a repeat is harmless), then the photo with that id as its owner_key
           const same = S.fromAi && S.name.trim() === S.aiName && S.supplier.trim() === S.aiSupplier;
-          const res = await client.addFound(id, { clientId: S.foundId, productName: S.name.trim(), supplier: S.supplier.trim(), source: same ? 'ai' : 'typed', note: S.note.trim(), action, matchedChemicalId: cand ? cand.chemical_id : undefined });
+          const res = await client.addFound(id, offline
+            ? Object.assign({ clientId: S.foundId }, M.offlineFoundBody(S))
+            : { clientId: S.foundId, productName: S.name.trim(), supplier: S.supplier.trim(), source: same ? 'ai' : 'typed', note: S.note.trim(), action, matchedChemicalId: cand ? cand.chemical_id : undefined });
           const found = res.found || {};
           const next = res.next && res.next.upload_for_chemical ? res.next : null;
-          S.result = { outcome: found.outcome || (action === 'create' ? 'created' : action === 'link' ? (isAdmin ? 'linked' : 'link_suggested') : 'recorded'), name: S.name.trim(), supplier: S.supplier.trim(), next, photoState: S.photo ? 'sending' : 'none', photoErr: '' };
+          S.result = { outcome: found.outcome || (action === 'create' ? 'created' : action === 'link' ? (isAdmin ? 'linked' : 'link_suggested') : 'recorded'), name: S.name.trim(), supplier: S.supplier.trim(), next, photoState: S.photo ? 'sending' : 'none', photoErr: '', unchecked: offline };
           if (next) S.result.nextHref = `#/upload?for_chemical=${encodeURIComponent(next.upload_for_chemical)}&place=${encodeURIComponent(next.place_id || audit.place_id)}&audit=${encodeURIComponent(id)}`;
           S.photoClientId = uuid();
           busy(-1); S.saving = false;
@@ -202,6 +217,9 @@
         }
       }
 
+      const onOnline = () => { if (S.offline && !S.result && S.readState !== 'reading') { S.offline = false; if (S.readState === 'offline') S.readState = ''; readFields(); draw(); } };
+      window.addEventListener('online', onOnline);
+      App.onLeave(() => window.removeEventListener('online', onOnline));
       draw();
     },
   });

@@ -1,4 +1,4 @@
-self.APP_VERSION = "d2eddc7a48b550e1";
+self.APP_VERSION = "4012e8551651f5b1";
 self.APP_SHELL = [
   "/",
   "/app-version.js",
@@ -13,7 +13,9 @@ self.APP_SHELL = [
   "/icons/icon-maskable-512.png",
   "/lib/audit-client.js",
   "/lib/audit-model.js",
+  "/lib/audit-outbox.js",
   "/lib/audit-report.js",
+  "/lib/audit-store.js",
   "/lib/export-model.js",
   "/lib/ghs-ref.mjs",
   "/lib/import-map.js",

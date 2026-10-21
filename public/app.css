@@ -1,5 +1,7 @@
 /* SDS EZY styles. Warm paper background, dark main colour, one accent. */
 :root {
+  --top-bar-h: 56px;
+  --bottom-bar-h: 0px;
   --bg: #F2F1EC;
   --surface: #FFFFFF;
   --ink: #1F2A24;
@@ -350,7 +352,7 @@ legend { font-size: 13px; font-weight: 600; color: var(--ink-soft); padding: 0 6
 .place-chip strong { overflow: hidden; text-overflow: ellipsis; }
 .place-chip .chip-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-soft); }
 .place-chip .chip-reg { font-size: 12px; color: var(--ink-soft); }
-.offline-banner { background: #3F3A2A; color: #fff; font-size: 14px; padding: 8px 16px; text-align: center; position: sticky; top: 56px; z-index: 29; }
+.offline-banner { background: #3F3A2A; color: #fff; font-size: 14px; padding: 8px 16px; text-align: center; position: sticky; top: var(--top-bar-h); z-index: 29; }
 .offline-banner[hidden] { display: none; }
 .tabbar { display: none; }
 button.big, a.btn.big { min-height: 52px; font-size: 16px; padding: 12px 18px; width: 100%; }
@@ -390,7 +392,7 @@ button.big, a.btn.big { min-height: 52px; font-size: 16px; padding: 12px 18px; w
 @media (max-width: 860px) {
   .app-header .menu-btn { display: none; }
   nav.sidebar, nav.sidebar.open { display: none; }
-  main { padding: 14px 14px calc(84px + env(safe-area-inset-bottom)); }
+  main { padding: 14px 14px calc(var(--bottom-bar-h) + 26px); }
   .tabbar { display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: var(--main); border-top: 1px solid var(--on-main-line); padding-bottom: env(safe-area-inset-bottom); }
   .tabbar a.tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 58px; color: var(--on-main-soft); text-decoration: none; font-size: 12.5px; padding: 6px 2px; }
   .tabbar a.tab.on { color: var(--on-main); font-weight: 700; background: var(--on-main-active); }
@@ -403,8 +405,8 @@ button.big, a.btn.big { min-height: 52px; font-size: 16px; padding: 12px 18px; w
   .modal { max-height: 94vh; }
   .btn-pair { grid-template-columns: 1fr 1fr; }
   .app-header { padding-left: 12px; padding-right: 12px; }
-  .offline-banner { top: 52px; }
-  #toasts { bottom: 74px; }
+  .offline-banner { top: var(--top-bar-h); }
+  #toasts { bottom: calc(var(--bottom-bar-h) + 16px); }
   table.data, table.checklist, .item-table { font-size: 13.5px; }
   .actions > button, .actions > a.btn { flex: 1 1 auto; }
 }
@@ -412,7 +414,7 @@ button.big, a.btn.big { min-height: 52px; font-size: 16px; padding: 12px 18px; w
 
 .update-bar { position: fixed; left: 0; right: 0; top: 0; z-index: 90; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); background: #3F3A2A; color: #fff; font-size: 14px; }
 .update-bar button { background: #fff; color: #1F2A24; border-color: #fff; }
-@media (max-width: 860px) { .update-bar { top: auto; bottom: calc(58px + env(safe-area-inset-bottom)); border-top: 1px solid #6b644d; } }
+@media (max-width: 860px) { .update-bar { top: auto; bottom: var(--bottom-bar-h); border-top: 1px solid #6b644d; } }
 @media print { .update-bar { display: none !important; } }
 
 .navbadge { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; border-radius: 10px; background: #D9A400; color: #1F2A24; font-size: 12px; font-weight: 700; text-align: center; line-height: 20px; vertical-align: 1px; }

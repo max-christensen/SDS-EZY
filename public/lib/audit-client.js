@@ -140,6 +140,7 @@
         client_id, product_name: f.productName, supplier: f.supplier ? String(f.supplier) : undefined, source: f.source || "typed",
         found_at: f.foundAt || nowIso(), note: f.note ? String(f.note) : undefined, action: f.action || "record",
         matched_chemical_id: f.matchedChemicalId != null ? Number(f.matchedChemicalId) : undefined,
+        unchecked: f.unchecked ? true : undefined,
       });
       const data = await mutate("found", { auditId, clientId: client_id }, `/api/audits/${enc(auditId)}/found`, jsonInit("POST", body));
       return Object.assign({}, data, { client_id });
@@ -175,9 +176,15 @@
 
     function photoUrl(photoId) { return "/api/audit-photos/" + enc(photoId); }
     // Work not yet sent. Online-only: every call is sent (or fails visibly) before the screen moves on, so this is always zero.
-    function pending() { return { answers: 0, photos: 0, other: 0 }; }
+    function pending() { return { answers: 0, photos: 0, other: 0, failed: 0, total: 0, bytes: 0 }; }
+    // Offline outbox contract (replaced by the offline wrapper). Online-only: nothing is ever local or queued.
+    const isLocalId = (id) => /^local-/.test(String(id == null ? "" : id));
+    const serverId = (id) => (isLocalId(id) ? null : id);
+    const queue = () => [];
+    const sendNow = async () => {};
+    const discardAll = async () => {};
 
-    return { start, list, get, markItem, readLabel, matchFound, addFound, addDisposal, addPhoto, finish, photoUrl, pending, onChange, OFFLINE_MESSAGE };
+    return { start, list, get, markItem, readLabel, matchFound, addFound, addDisposal, addPhoto, finish, photoUrl, pending, isLocalId, serverId, queue, sendNow, discardAll, onChange, OFFLINE_MESSAGE };
   }
 
   return { create, defaultUuid, OFFLINE_MESSAGE };

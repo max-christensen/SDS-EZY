@@ -121,3 +121,56 @@ test("expectedText", () => {
   assert.equal(M.expectedText({ expected_container_note: "drum" }), "drum");
   assert.equal(M.expectedText({}), "");
 });
+
+test("local ids", () => {
+  assert.equal(M.isLocalId("local-1b2c"), true);
+  assert.equal(M.isLocalId(12), false);
+  assert.equal(M.isLocalId(undefined), false);
+});
+
+test("cardState from queue entries: failed beats sending beats queued, only this audit and chemical", () => {
+  const ids = ["local-a", 7];
+  const q = [
+    { kind: "answer", chemicalId: 5, auditId: "local-a", status: "queued" },
+    { kind: "answer", chemicalId: 6, auditId: 7, status: "failed", message: "Too long" },
+    { kind: "answer", chemicalId: 5, auditId: 99, status: "failed", message: "other audit" },
+    { kind: "photo", chemicalId: 5, auditId: 7, status: "failed" },
+  ];
+  assert.equal(M.cardState(q, ids, 5).state, "queued");
+  assert.equal(M.cardState(q, ids, 6).state, "failed");
+  assert.equal(M.cardState(q, ids, 8).state, "");
+  q.push({ kind: "answer", chemicalId: 5, auditId: 7, status: "sending" });
+  assert.equal(M.cardState(q, ids, 5).state, "sending");
+  assert.equal(M.cardStateText(M.cardState(q, ids, 5)), "Saved on this phone, not sent yet");
+  assert.equal(M.cardStateText(M.cardState(q, ids, 6)), "Needs attention: Too long");
+  assert.equal(M.cardStateText(M.cardState(q, ids, 8)), "");
+});
+
+test("header text, totals, sending, unsent photo, unsent for audit", () => {
+  assert.equal(M.headerText({ answers: 9, photos: 3, other: 0, failed: 0 }), "Not yet sent: 9 answers, 3 photos");
+  assert.equal(M.headerText({ answers: 1, photos: 0, other: 0, failed: 2 }), "Not yet sent: 1 answer. 2 need attention");
+  assert.equal(M.headerText({ answers: 0, photos: 0, other: 0, failed: 1 }), "Needs attention: 1 not sent");
+  assert.equal(M.headerText({}), "");
+  assert.equal(M.pendingTotal({ answers: 1, photos: 2, other: 3, failed: 1 }), 7);
+  assert.equal(M.isSending([{ status: "queued" }, { status: "sending" }]), true);
+  assert.equal(M.isSending([{ status: "queued" }]), false);
+  assert.equal(M.isUnsentPhoto([{ kind: "photo", clientId: "c1" }], { client_id: "c1", id: 1 }), true);
+  assert.equal(M.isUnsentPhoto([], { id: 1 }), false);
+  assert.equal(M.isUnsentPhoto([], { id: 1, unsent: true }), true);
+  assert.equal(M.unsentForAudit([{ auditId: "local-a" }], ["local-a", 3]), true);
+  assert.equal(M.unsentForAudit([{ auditId: 9 }], ["local-a", 3]), false);
+});
+
+test("offline found payload is typed, record-only and unchecked; wording constants", () => {
+  assert.deepEqual(M.offlineFoundBody({ name: " Mystery ", supplier: "", note: "behind door" }),
+    { productName: "Mystery", supplier: "", note: "behind door", source: "typed", action: "record", unchecked: true });
+  assert.match(M.NO_SIGNAL_FOUND, /^No signal: you can't check the register or read the label now\./);
+  assert.match(M.NO_SIGNAL_FOUND, /flagged for the admin to check\.$/);
+  assert.equal(M.SAVE_PLACE_FIRST, "Save this place for offline first (on the place page).");
+  assert.match(M.FINISHED_ON_PHONE, /nothing is lost\.$/);
+});
+
+test("hasQueuedFinish", () => {
+  assert.equal(M.hasQueuedFinish([{ kind: "finish", auditId: "local-a" }], ["local-a"]), true);
+  assert.equal(M.hasQueuedFinish([{ kind: "answer", auditId: "local-a" }], ["local-a"]), false);
+});

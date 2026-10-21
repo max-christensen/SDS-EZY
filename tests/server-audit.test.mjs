@@ -542,3 +542,55 @@ T("AI vision test and label read routes exist and are protected", async () => {
   assert.equal((await a.post("/api/settings/ai/test-vision")).status, 403);
   assert.equal((await anon.post("/api/settings/ai/test-vision")).status, 401);
 });
+
+T("unchecked found items (sent offline) become found_unchecked findings; accept changes nothing", async () => {
+  const p = await mkPlace("AuditU");
+  const c = await mkChem("UBase"); await link(p, c, 1, "L");
+  const au = (await start(a, p)).data.audit;
+  const fid = uuid();
+  const body = { client_id: fid, product_name: "Offline tin", supplier: "Acme", action: "record", unchecked: true, found_at: now(), note: "behind the door" };
+  const f1 = await a.post(`/api/audits/${au.id}/found`, body);
+  assert.equal(f1.status, 201, JSON.stringify(f1.data));
+  assert.equal(f1.data.found.outcome, "recorded");
+  assert.equal(f1.data.found.unchecked, true);
+  assert.equal((await a.post(`/api/audits/${au.id}/found`, { ...body, client_id: uuid(), action: "create" })).status, 400); // only with record
+  const ph = await a.req("POST", `/api/audits/${au.id}/photos`, photoForm(uuid(), "found", fid));
+  assert.equal(ph.status, 201);
+  assert.equal((await findingsFor(au.id)).length, 0);                       // none before finish
+  const fin = await finish(a, au.id);
+  assert.equal(fin.status, 200);
+  assert.equal((await finish(a, au.id)).status, 200);                       // replayed finish
+  assert.equal((await a.post(`/api/audits/${au.id}/found`, body)).status, 200); // replayed found request
+  const fs1 = await findingsFor(au.id);
+  assert.equal(fs1.length, 1);
+  const f = fs1[0];
+  assert.equal(f.kind, "found_unchecked");
+  assert.equal(f.details.name, "Offline tin");
+  assert.equal(f.details.supplier, "Acme");
+  assert.equal(f.details.note, "behind the door");
+  assert.deepEqual(f.details.photo_ids, [ph.data.photo.id]);
+  assert.deepEqual(f.photo_ids, [ph.data.photo.id]);
+  assert.ok((await admin.get("/api/review")).data.counts.findings_open >= 1);
+  // a user cannot accept; an admin accepting changes nothing on the register
+  assert.equal((await a.post(`/api/findings/${f.id}/accept`)).status, 403);
+  const before = await count(p);
+  const acc = await admin.post(`/api/findings/${f.id}/accept`);
+  assert.equal(acc.status, 200, JSON.stringify(acc.data));
+  assert.equal(acc.data.result, "noted");
+  assert.equal(acc.data.message, "Noted. Nothing on the register was changed. Add or link the chemical from the register if needed.");
+  assert.equal(acc.data.finding.status, "accepted");
+  assert.equal(await count(p), before);
+  assert.equal((await a.get(`/api/chemicals?q=${encodeURIComponent("offline tin")}`)).data.items.length, 0);
+  // arriving after the audit was finished: the finding is made at once, once
+  const late = { client_id: uuid(), product_name: "Late tin", action: "record", unchecked: true, found_at: now() };
+  const l1 = await a.post(`/api/audits/${au.id}/found`, late);
+  assert.equal(l1.status, 201, JSON.stringify(l1.data));
+  assert.equal((await a.post(`/api/audits/${au.id}/found`, late)).status, 200);
+  assert.equal((await a.post(`/api/audits/${au.id}/found`, { client_id: uuid(), product_name: "Not allowed", action: "record" })).status, 409);
+  const fs2 = (await findingsFor(au.id)).filter(x => x.kind === "found_unchecked");
+  assert.equal(fs2.length, 2);
+  assert.equal(fs2.filter(x => x.status === "open").length, 1);
+  const dis = await admin.post(`/api/findings/${fs2.find(x => x.status === "open").id}/dismiss`, {});
+  assert.equal(dis.data.finding.status, "dismissed");
+  assert.equal(await count(p), before);
+});

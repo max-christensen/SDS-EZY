@@ -24,6 +24,7 @@
       try { d = await App.api('/places/' + encodeURIComponent(placeId)); }
       catch (err) {
         if (err.status === 404) { root.innerHTML = '<div class="empty-state"><h2>Place not found</h2><a class="btn primary" href="#/places">Choose a place</a></div>'; return; }
+        if (err.offline || !App.isOnline()) { root.innerHTML = `<a class="crumb" href="#/places">&larr; Places</a><div class="chem-head"><h1>Audit this place</h1></div><div class="notice warn" role="alert">${esc(M.OFFLINE_START_NOTICE)}</div><div class="empty-state"><h2>${esc(M.SAVE_PLACE_FIRST)}</h2><p>Open the place while you have signal and press Save this place for offline. Then you can start the audit with no signal.</p><a class="btn primary" href="#/place/${esc(placeId)}">Go to the place page</a></div>`; return; }
         throw err;
       }
       let mine = [];
@@ -52,6 +53,7 @@
           ${lines.length ? `<ul class="mini-list" style="margin:8px 0 0">${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul><p class="hint">These show first in the audit.</p>` : (r.total ? '<p class="muted" style="margin:6px 0 0">All of them have an SDS in date and an assessment.</p>' : '')}
           ${r.total ? '' : '<p class="muted" style="margin:6px 0 0">You can still start, and add what you find.</p>'}
           <p class="hint" style="margin-top:10px">You will mark each one Present, Not found or Changed, and can take photos as proof. Nothing on the register changes until an admin reviews it.</p></section>
+        ${!App.isOnline() ? `<div class="notice" role="status">${esc(M.OFFLINE_START_NOTICE)}</div>` : ''}
         ${blocked ? `<div class="notice warn" role="alert">${esc(blocked)}</div>` : ''}
         ${iHave ? '<p class="hint">You can have one audit in progress for a place. Finish it, then start another.</p>' : `<button type="button" class="primary big au-big" id="startBtn"${blocked ? ' disabled' : ''}>Start audit</button>`}
         <p class="error-text" id="startErr" role="alert"></p>`;
@@ -66,7 +68,7 @@
           if (res.existing) App.toast('Continuing your audit of this place.', 'ok');
           App.navigate('#/audit/' + res.audit.id);
         } catch (e) {
-          err.textContent = e.message;
+          err.textContent = (e.offline || e.needsPlaceSaved || e.code === 'place_not_saved') ? M.SAVE_PLACE_FIRST : e.message;
           btn.disabled = false; btn.textContent = 'Try again';
         }
       });

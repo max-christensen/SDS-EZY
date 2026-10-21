@@ -166,6 +166,47 @@
     return [q, it.expected_container_note].filter(Boolean).join(" · ");
   }
 
+  // ---- offline outbox (stage 8). A queue entry looks like {id, kind: "answer"|"photo"|"found"|"disposal"|"start"|"finish", status: "queued"|"sending"|"failed", auditId, chemicalId?, ownerType?, ownerKey?, clientId?, message?}
+  function isLocalId(id) { return /^local-/.test(String(id == null ? "" : id)); }
+  function sameAudit(entryAuditId, ids, serverAuditId) { return (ids || []).some((x) => x != null && (String(x) === String(entryAuditId) || (serverAuditId != null && String(x) === String(serverAuditId)))); }
+  function cardState(queue, ids, chemicalId) {
+    const mine = (queue || []).filter((q) => q.kind === "answer" && String(q.chemicalId) === String(chemicalId) && sameAudit(q.auditId, ids, q.serverAuditId));
+    const failed = mine.find((q) => q.status === "failed");
+    if (failed) return { state: "failed", message: failed.message || "It could not be sent." };
+    if (mine.some((q) => q.status === "sending")) return { state: "sending", message: "" };
+    if (mine.length) return { state: "queued", message: "" };
+    return { state: "", message: "" };
+  }
+  function cardStateText(st) {
+    if (!st || !st.state) return "";
+    if (st.state === "failed") return "Needs attention: " + st.message;
+    return "Saved on this phone, not sent yet";
+  }
+  function headerText(p) {
+    p = p || {};
+    const base = pendingText(p);
+    const f = Number(p.failed) || 0;
+    if (!f) return base;
+    const tail = f + (f === 1 ? " needs" : " need") + " attention";
+    return base ? base + ". " + tail : "Needs attention: " + f + " not sent";
+  }
+  function pendingTotal(p) { p = p || {}; return (Number(p.answers) || 0) + (Number(p.photos) || 0) + (Number(p.other) || 0) + (Number(p.failed) || 0); }
+  function isSending(queue) { return (queue || []).some((q) => q.status === "sending"); }
+  function isUnsentPhoto(queue, photo, ids) {
+    if (photo.unsent) return true;
+    return (queue || []).some((q) => q.kind === "photo" && ((q.clientId && q.clientId === photo.client_id) || (q.id != null && String(q.id) === String(photo.id))));
+  }
+  function hasQueuedFinish(queue, ids) { return (queue || []).some((q) => q.kind === "finish" && sameAudit(q.auditId, ids, q.serverAuditId)); }
+  function unsentForAudit(queue, ids) { return (queue || []).some((q) => sameAudit(q.auditId, ids, q.serverAuditId)); }
+  // The body the found screen sends when there is no signal: typed only, recorded only, flagged for the admin to check.
+  function offlineFoundBody(f) {
+    return { productName: String(f.name || "").trim(), supplier: String(f.supplier || "").trim(), note: String(f.note || "").trim(), source: "typed", action: "record", unchecked: true };
+  }
+  const NO_SIGNAL_FOUND = "No signal: you can't check the register or read the label now. Type what you can see; it is recorded in this audit and flagged for the admin to check.";
+  const SAVE_PLACE_FIRST = "Save this place for offline first (on the place page).";
+  const FINISHED_ON_PHONE = "Finished on this phone. It will be sent when you have signal; nothing is lost.";
+  const OFFLINE_START_NOTICE = "Offline: this audit will be sent when you have signal.";
+
   const CSS = `
 .au-head{margin:0 0 6px}
 .au-head h1{font-size:18px;margin:0}
@@ -173,7 +214,7 @@
 .au-prog{position:sticky;top:57px;z-index:20;background:var(--bg);margin:0 -14px 10px;padding:6px 14px 2px;border-bottom:1px solid var(--border)}
 .au-prog .au-count{font-weight:700;font-size:15px}
 .au-prog .progress{margin:4px 0 6px}
-.au-unsent{background:var(--warn-bg);color:var(--warn);border:1px solid #E8D4A0;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:14px;font-weight:600}
+.au-unsent{background:var(--warn-bg);color:var(--warn);border:1px solid #E8D4A0;border-radius:6px;padding:6px 12px;margin:4px 0;font-size:14px;font-weight:600}
 .au-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px}
 .au-card.attn{border-left:5px solid var(--warn)}
 .au-card.done-present{border-left:5px solid var(--done)}
@@ -239,5 +280,7 @@
     attentionRank, needsAttention, sortItems, progress, progressText, placeReadiness, changedProblem,
     scaleSize, pickTakenAt, mbText, parseSummary, summaryFromAudit, summaryRows, nextSteps, unmarkedWarning,
     foundOutcomeText, pendingText, expectedText, CSS, ensureCss,
+    isLocalId, cardState, cardStateText, headerText, pendingTotal, isSending, isUnsentPhoto, unsentForAudit, hasQueuedFinish, offlineFoundBody,
+    NO_SIGNAL_FOUND, SAVE_PLACE_FIRST, FINISHED_ON_PHONE, OFFLINE_START_NOTICE,
   };
 });

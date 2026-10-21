@@ -301,12 +301,25 @@
   }
   App.theme = { applyTheme, contrastRatio, readableOn, mixHex, DEFAULT_MAIN, DEFAULT_ACCENT };
 
+  // Bar heights as CSS variables, so fixed banners can sit above the tab bar without covering it.
+  function syncBarHeights() {
+    const h = $('appHeader'), t = $('tabbar');
+    const root = document.documentElement.style;
+    root.setProperty('--top-bar-h', (h && h.offsetHeight ? h.offsetHeight : 56) + 'px');
+    root.setProperty('--bottom-bar-h', (t && getComputedStyle(t).display !== 'none' ? t.offsetHeight : 0) + 'px');
+  }
+  App.syncBarHeights = syncBarHeights;
+  window.addEventListener('resize', syncBarHeights);
+  window.addEventListener('orientationchange', syncBarHeights);
+  if (window.ResizeObserver) { const ro = new ResizeObserver(syncBarHeights); document.addEventListener('DOMContentLoaded', () => { ['appHeader', 'tabbar'].forEach((id) => { const el = $(id); if (el) ro.observe(el); }); }); }
+
   App.refreshBranding = function () {
     applyTheme(App.publicSettings.main_color, App.publicSettings.accent_color);
     document.title = App.companyName();
     $('appHeader').innerHTML = `<a class="brand-link" href="#/places" aria-label="${App.esc(App.companyName())}">${App.brandMarkHtml()}</a><a class="place-chip" id="placeChip" href="#/places"></a>`;
     $('loginBrand').innerHTML = App.brandMarkHtml();
     renderChip();
+    syncBarHeights();
   };
   function renderChip() {
     const el = $('placeChip'); if (!el) return;
@@ -467,6 +480,7 @@
     const lb = $('sidebar').querySelector('#logoutBtn'); if (lb) lb.addEventListener('click', logout);
     renderTabs(activeKey);
     renderChip();
+    syncBarHeights();
   }
 
   // The "More" screen: everything that does not fit in the bottom bar.
@@ -631,7 +645,12 @@
   }
   async function logout() {
     // Hooks run first and are awaited; they still run (and sign-out still goes ahead) when the phone is offline.
-    for (const fn of logoutHooks) { try { await fn(); } catch (e) { console.error(e); } }
+    // In registration order, each awaited. A hook that returns exactly false cancels the sign-out; one that throws is logged and skipped.
+    for (const fn of logoutHooks) {
+      let r;
+      try { r = await fn(); } catch (e) { console.error(e); continue; }
+      if (r === false) return;
+    }
     try { await App.api('/logout', { method: 'POST' }); } catch (e) { /* offline or failed: still sign out here */ }
     location.reload();
   }
