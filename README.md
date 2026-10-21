@@ -108,31 +108,37 @@ Two things in the app are **our understanding, not something the Safe Work Austr
 
 ## Set it up
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/max-christensen/SDS-EZY)
+
+**Using the button:** it makes your own copy of this repository in your GitHub (or GitLab) account, creates the Worker, the D1 database and the R2 bucket in your Cloudflare account from [wrangler.toml](wrangler.toml), and runs the deploy script, which loads the database tables for you (it runs [schema.sql](schema.sql), which is safe to run on every deploy). Nothing to run afterwards.
+
+The button needs nothing typed in. **Open your Worker's address straight after it deploys and create the admin account** (see [First run](#first-run)). Until an admin exists, the first person to open the setup screen becomes the admin, so don't leave it. For extra protection, see [Optional secrets](#optional-secrets). Reading safety data sheets works straight away with Cloudflare Workers AI; see [Choosing the AI](#choosing-the-ai) to use your own key instead.
+
+R2 may ask you to add a payment method before it can be switched on, even though normal use stays inside the free allowance (see [What you need](#what-you-need)).
+
+Prefer to do everything by hand? Follow these steps.
+
 1. Get the code and install it:
    ```
-   git clone <this repository's URL> sds-ezy
+   git clone https://github.com/max-christensen/SDS-EZY.git sds-ezy
    cd sds-ezy
    npm install
    npx wrangler login
    ```
-2. Copy the config template. `wrangler.toml` is git-ignored because it holds your own IDs:
-   ```
-   cp wrangler.template.toml wrangler.toml
-   ```
-3. Create the database and the file bucket. The names below are the ones the template already uses:
+2. Create the database and the file bucket. The names below are the ones [wrangler.toml](wrangler.toml) already uses:
    ```
    npx wrangler d1 create sds-ezy-db
    ```
-   This prints a `database_id`. Open your new `wrangler.toml` and replace `REPLACE_WITH_YOUR_DATABASE_ID` with it. (If Wrangler offers to add the binding to your config for you, say no; it's already there.)
+   This prints a `database_id`. Open [wrangler.toml](wrangler.toml) and replace `REPLACE_WITH_YOUR_DATABASE_ID` with it. (If Wrangler offers to add the binding to your config for you, say no; it's already there.) If you will keep working in this checkout and commit changes, run `git update-index --skip-worktree wrangler.toml` so your own ID is never committed (see [docs/DEPLOY.md](docs/DEPLOY.md)).
    ```
    npx wrangler r2 bucket create sds-ezy-files
    ```
-4. Deploy:
+3. Deploy:
    ```
    npm run deploy
    ```
    This first loads the database tables from [schema.sql](schema.sql) into your D1 database (safe to repeat), then deploys the Worker. Wrangler prints your address, something like `https://sds-ezy.<your-subdomain>.workers.dev`.
-5. **Optional: secrets** for extra protection, and your AI choice. See [Optional secrets](#optional-secrets) and [Choosing the AI](#choosing-the-ai). If you want a setup key, set it before you open the app for the first time.
+4. **Optional: secrets** for extra protection, and your AI choice. See [Optional secrets](#optional-secrets) and [Choosing the AI](#choosing-the-ai). If you want a setup key, set it before you open the app for the first time.
 
 ## First run
 
@@ -203,7 +209,7 @@ npm run dev
 ```
 The app is then at http://localhost:8787. Local data, including uploaded PDFs, is kept in the `.wrangler/` folder, which is git-ignored. To try it with the demo data: `npm run demo:build` then `npm run demo:seed:local`.
 
-**Workers AI is not simulated locally.** With the `[ai]` block in `wrangler.toml`, `wrangler dev` sends AI calls to Cloudflare's real service (and may be charged). To stay fully local, remove the `[ai]` block from your local config; uploads then use the no-AI draft path, or you can point `OPENAI_BASE_URL` at a local stand-in. The `.dev.vars` file is git-ignored; never commit it.
+**Workers AI is not simulated locally.** The committed [wrangler.toml](wrangler.toml) includes the `[ai]` binding, and `wrangler dev` would send AI calls to Cloudflare's real service (and may be charged). So `npm run dev` does not use that block: it uses your own `wrangler.local.toml` if you have one, otherwise it writes `wrangler.generated.toml` (git-ignored) from `wrangler.toml` without `[ai]`. Your `wrangler.toml` is never modified. Uploads then use the no-AI draft path, or you can set a provider key in `.dev.vars`, or point `OPENAI_BASE_URL` at a local stand-in. The `.dev.vars` file is git-ignored; never commit it.
 
 The app installs a service worker (for the home-screen app and offline reading) that caches the app files. After editing files in `public/` while developing, unregister it in your browser's developer tools (Application, Service Workers) or the page may show old code. `npm run deploy` bumps the cached version automatically (`npm run predeploy`), so a new deploy replaces the old files on every phone.
 
@@ -214,7 +220,7 @@ Run the tests with `npm test` (Node 22.13 or newer, because some use Node's buil
 ```
 npm run deploy
 ```
-There is no downtime and no server to restart. If a newer version changes the database tables, its release notes will say what to run. To keep a backup of your data: `npx wrangler d1 export sds-ezy-db --remote --output=backup.sql` (the PDFs are in the `sds-ezy-files` bucket).
+There is no downtime and no server to restart. If you used the button, your copy is connected to Cloudflare, which rebuilds and redeploys automatically each time the connected branch of your copy changes, running the same deploy script (so the tables are brought up to date safely every time). If a newer version changes the database tables, its release notes will say what to run. To keep a backup of your data: `npx wrangler d1 export sds-ezy-db --remote --output=backup.sql` (the PDFs are in the `sds-ezy-files` bucket).
 
 ## Notes for contributors
 
@@ -222,7 +228,8 @@ There is no downtime and no server to restart. If a newer version changes the da
 - `schema.sql` runs on every deploy, so it must stay re-runnable: `CREATE ... IF NOT EXISTS` and `INSERT OR IGNORE`. It never alters a table that already exists, so changing an existing table needs a separate migration.
 - **Keep D1 reads low.** Every column used in a `WHERE`, `JOIN` or `ORDER BY` has an index. The review list, the registers and search read only the `chemicals` table, which carries summary copies of the current SDS and assessment (kept in step by `refreshChemicalSummary`). Long lists (SDS history, assessment history, the other products on a shared SDS) load on demand. `node scripts/measure-rows.mjs` re-measures against a local server started with `--var DEBUG_ROWS:1`.
 - Dates in the browser must be built from the local year, month and day, never from `toISOString()`, or users east of UTC see everything a day early.
-- Role rules live in one table in [src/index.js](src/index.js). Add new write routes as admin-only; the only user-allowed writes are the two upload routes.
+- Role rules live in one table in [src/index.js](src/index.js). Add new write routes as admin-only; the only user-allowed writes are the upload routes and the audit routes (docs/AUDIT-CHANGE.md).
+- **`wrangler.toml` is the committed placeholder** the Deploy button reads: names only, no real IDs, no secrets. Keep your own IDs and settings in `wrangler.local.toml` (git-ignored), or edit `wrangler.toml` locally and run `git update-index --skip-worktree wrangler.toml`. `npm run hooks:install` adds a local pre-commit check that refuses a commit if `wrangler.toml` stops being a placeholder, and `npm run check:deploy-config` runs the same check. See [docs/DEPLOY.md](docs/DEPLOY.md).
 - Your own real example data (spreadsheets, assessment documents, real SDS PDFs) belongs in `seed-local/`, which is git-ignored because it can contain real names and phone numbers.
 - `node scripts/answer-key.mjs` compares the AI reading with a set of completed assessments you supply in `seed-local/`, and reports how many fields match. It writes its reports only under `seed-local/`.
 

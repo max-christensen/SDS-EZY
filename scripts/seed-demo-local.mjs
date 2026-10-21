@@ -4,6 +4,7 @@
 // It refuses to run with --remote, never reads wrangler.toml itself (wrangler resolves the DB binding),
 // and passes --local to every wrangler call.
 import { spawnSync } from 'node:child_process';
+import { pickConfig } from './dev.mjs';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,8 +27,12 @@ const dry = has('--dry-run');
 const wrangler = join(ROOT, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 const outDir = join(ROOT, 'demo-out');
 
+// The same config `npm run dev` uses (your wrangler.local.toml, else a copy of wrangler.toml without the [ai] block), so the demo
+// goes into the same local database the dev server opens (local D1 state is keyed by the config's database_id).
+const config = pickConfig().path;
+
 function wr(argv) {
-  const full = [...argv, '--local', '--persist-to', persist];
+  const full = [...argv, '--local', '--persist-to', persist, '-c', config];
   if (full.includes('--remote')) throw new Error('internal error: remote flag');
   if (dry) { console.log('[dry-run] wrangler ' + full.join(' ')); return; }
   const r = spawnSync(process.execPath, [wrangler, ...full], { cwd: ROOT, stdio: 'inherit' });

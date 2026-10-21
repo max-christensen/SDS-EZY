@@ -5,11 +5,11 @@
   "description": "A chemical register with a hazard risk assessment for each chemical, drafted from an uploaded safety data sheet. Runs entirely on Cloudflare (Workers, D1, R2).",
   "license": "MIT",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "node scripts/dev.mjs",
     "vendor": "node scripts/vendor.mjs",
     "deploy": "npm run db:init && wrangler deploy",
     "db:init": "wrangler d1 execute DB --remote --yes --file=./schema.sql",
-    "db:init:local": "wrangler d1 execute DB --local --file=./schema.sql",
+    "db:init:local": "node scripts/dev.mjs --wrangler d1 execute DB --local --file=./schema.sql",
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "demo:build": "node scripts/make-demo.mjs",
     "demo:seed:local": "node scripts/seed-demo-local.mjs",
@@ -17,7 +17,9 @@
     "answer-key:selftest": "node scripts/answer-key.mjs --self-test",
     "predeploy": "node scripts/bump-version.mjs",
     "check:version": "node scripts/bump-version.mjs --check",
-    "make:icons": "node scripts/make-icons.mjs"
+    "make:icons": "node scripts/make-icons.mjs",
+    "check:deploy-config": "node scripts/check-deploy-config.mjs",
+    "hooks:install": "node scripts/install-git-hook.mjs"
   },
   "devDependencies": {
     "fflate": "^0.8.3",
@@ -28,5 +30,21 @@
     "read-excel-file": "^9.3.12",
     "wrangler": "^4.0.0",
     "write-excel-file": "^4.1.1"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "The SDS EZY database. Created for you in your Cloudflare account; the tables are loaded on every deploy and nothing is lost when you redeploy."
+      },
+      "FILES": {
+        "description": "Storage for the safety data sheet PDFs, audit photos and your logo (an R2 bucket). Created for you. R2 may ask for a payment method before it can be switched on, even though normal use stays inside the free allowance."
+      },
+      "AI": {
+        "description": "Cloudflare Workers AI reads the safety data sheets, with nothing to set up. You can use your own Claude, OpenAI or Gemini key instead in Settings after the first sign-in."
+      }
+    }
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

@@ -2,8 +2,7 @@
 .dev.vars
 .env
 
-# Project-specific config and local state, kept out of the repo
-wrangler.toml
+# Local state and files that must stay out of the repo
 .wrangler/
 seed-local/
 CLAUDE.md
@@ -17,6 +16,8 @@ Thumbs.db
 *.log
 .mcp.json
 BRIEF.md
+# Your own local Wrangler settings (never committed). wrangler.toml is the committed PLACEHOLDER; see docs/DEPLOY.md
 wrangler.local.toml
+wrangler.generated.toml
 .claude-flow/
 info/

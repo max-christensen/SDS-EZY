@@ -11,7 +11,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC = join(root, 'public');
 const SELF = 'app-version.js';
 const NOISE = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
-const TEXT = /\.(js|mjs|css|html|svg|json|webmanifest|txt|md)$/i;
+// Text files (line endings are normalised before hashing). Includes extensionless ones such as _headers and LICENSE, which a Windows
+// checkout with core.autocrlf would otherwise hash as CRLF.
+const TEXT = /(\.(js|mjs|css|html|svg|json|webmanifest|txt|md)|(^|\/)(_headers|LICENSE[^/]*))$/i;
 
 export function listFiles(dir = PUBLIC) {
   const out = [];

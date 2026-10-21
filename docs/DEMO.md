@@ -135,7 +135,7 @@ Suggested npm scripts for `package.json`:
 The demo must be a **separate Worker with its own D1 database and R2 bucket**, never your real one. Do these steps yourself,
 deliberately, when you are ready:
 
-1. Make a second config, for example `wrangler.demo.toml` (not committed), copied from `wrangler.template.toml`, with a different
+1. Make a second config, for example `wrangler.demo.toml` (not committed), copied from the placeholder `wrangler.toml`, with a different
    `name = "sds-ezy-demo"`, its own `d1_databases` entry (`database_name = "sds-ezy-demo-db"`), its own `r2_buckets` entry
    (`bucket_name = "sds-ezy-demo-files"`), and these vars:
 
