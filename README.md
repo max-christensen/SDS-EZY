@@ -10,6 +10,30 @@ It is built for people who work out on other people's sites as well as in a work
 
 It does one job: **the chemical register and the risk assessment for each chemical.** Work instructions, SOPs, JSEAs and SWMS are out of scope; they belong in a different product.
 
+## Live demo
+
+**Try it: https://sds-ezy-demo.max-christensen.workers.dev**
+
+It is a read-only demo for a made-up business, Tallowood Joinery & Maintenance Pty Ltd, with 67 chemicals and generated, clearly fictional safety data sheets. Nothing in it is real and nothing can be changed. On the login screen use the one-click buttons, or type a login:
+
+| Role | Email | Password |
+|---|---|---|
+| Administrator | `demo-admin@example.invalid` | `demo-Ezy-2026` |
+| User | `demo-user@example.invalid` | `demo-Ezy-2026` |
+
+The password is public on purpose and exists only for the demo. Screenshots below are from the live demo.
+
+| Desktop | Phone |
+|---|---|
+| ![Login](docs/screenshots/live-desktop-login.png) | ![Login on a phone](docs/screenshots/live-phone-login.png) |
+| ![The register](docs/screenshots/live-desktop-register.png) | ![The register on a phone](docs/screenshots/live-phone-register.png) |
+| ![A chemical page](docs/screenshots/live-desktop-chemical.png) | ![A chemical page on a phone](docs/screenshots/live-phone-chemical.png) |
+| ![The hazardous register](docs/screenshots/live-desktop-hazardous.png) | ![The hazardous register on a phone](docs/screenshots/live-phone-hazardous.png) |
+| ![A place and its totals](docs/screenshots/live-desktop-place.png) | ![A place on a phone](docs/screenshots/live-phone-place.png) |
+| ![The manifest](docs/screenshots/live-desktop-manifest.png) | ![The manifest on a phone](docs/screenshots/live-phone-manifest.png) |
+| ![An audit report](docs/screenshots/live-desktop-audit-report.png) | ![An audit report on a phone](docs/screenshots/live-phone-audit-report.png) |
+| ![Review home](docs/screenshots/live-desktop-review.png) | ![Review home on a phone](docs/screenshots/live-phone-review.png) |
+
 ## Important: read this first
 
 > The safety data sheet (SDS) information and risk assessments in this register are prepared from the supplier's safety data sheet. They are a guide and a starting point.
@@ -198,7 +222,7 @@ Admins can switch the code step off and on in **Settings**. **If the code email 
 
 ## Read-only demo (optional)
 
-The same code can run as a public, read-only demo. Set the plain variable `DEMO_MODE` to `1`, and `DEMO_ADMIN_EMAIL` and `DEMO_USER_EMAIL` to two accounts; the login screen then offers one-click demo logins, and **every change is refused for everyone**, including the demo admin and the demo user (uploads too). A seeded demo for a made-up business (about 65 chemicals with generated, clearly fictional SDS PDFs, a few overdue for review, assessments at every risk level) is built by `npm run demo:build`. [docs/DEMO.md](docs/DEMO.md) explains how to load it into a **separate** demo database and bucket. Never point a demo at your real data.
+The same code can run as a public, read-only demo. Set `DEMO_MODE` to `1`, and `DEMO_ADMIN_EMAIL` and `DEMO_USER_EMAIL` to two accounts (as secrets, so a redeploy from the button's build does not remove them); the login screen then offers one-click demo logins, and **every change is refused for everyone**, including the demo admin and the demo user (uploads too). A seeded demo for a made-up business (67 chemicals with generated, clearly fictional SDS PDFs, a few overdue for review, assessments at every risk level) is built by `npm run demo:build`. [docs/DEMO.md](docs/DEMO.md) explains how to load it into a **separate** demo database and bucket, and how the live demo above was set up. Never point a demo at your real data.
 
 ## Running it locally
 
